@@ -1,0 +1,56 @@
+Package: bash
+Status: install ok installed
+Priority: required
+Architecture: amd64
+Version: 5.2.21-2ubuntu4
+Description: GNU Bourne Again SHell
+ BASH is an sh-compatible command language interpreter.
+ Package: not-a-package (a continuation line)
+
+Package: libc6
+Status: install ok installed
+Architecture: amd64
+Source: glibc
+Version: 2.39-0ubuntu8.9
+Description: GNU C Library: Shared libraries
+
+Package: linux-image-6.8.0-138-generic
+Status: install ok installed
+Architecture: amd64
+Source: linux-signed
+Version: 6.8.0-138.138
+Description: Signed kernel image generic
+
+Package: linux-image-6.8.0-139-generic
+Status: deinstall ok config-files
+Architecture: amd64
+Source: linux-signed
+Version: 6.8.0-139.139
+Description: Signed kernel image generic
+
+Package: linux-image-6.8.0-147-generic
+Status: install ok installed
+Architecture: amd64
+Source: linux-signed
+Version: 6.8.0-147.147
+Description: Signed kernel image generic
+
+Package: linux-image-generic
+Status: install ok installed
+Architecture: amd64
+Source: linux-meta
+Version: 6.8.0-147.147
+Description: Generic Linux kernel image
+
+Package: unattended-upgrades
+Status: install ok installed
+Architecture: all
+Version: 2.9.1+nmu4ubuntu1
+Description: automatic installation of security upgrades
+
+Package: openssh-server
+Status: install ok installed
+Architecture: amd64
+Source: openssh (1:9.6p1-3ubuntu13.5)
+Version: 1:9.6p1-3ubuntu13.5
+Description: secure shell (SSH) server

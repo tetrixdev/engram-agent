@@ -34,6 +34,14 @@ type Config struct {
 	// Root is the host's filesystem root for the files the inventory reads
 	// (/etc/os-release, /var/lib/dpkg/status, ...); default "/".
 	Root string `json:"root"`
+
+	// Alerts change the built-in rules by name, e.g. {"memory_pct": {"warn": 85, "for_s": 600}}.
+	Alerts map[string]json.RawMessage `json:"alerts,omitempty"`
+	// LogFiles are the files `engram-agent logs --file` may read, as glob
+	// patterns; default every file in /var/log and one level below.
+	LogFiles []string `json:"log_files,omitempty"`
+	// Report turns reporting off when false (history is still kept).
+	Report *bool `json:"report,omitempty"`
 }
 
 // Load reads path; a missing file is the defaults, a broken one an error.
@@ -74,6 +82,9 @@ func (c *Config) fill() {
 	}
 	if c.Root == "" {
 		c.Root = "/"
+	}
+	if len(c.LogFiles) == 0 {
+		c.LogFiles = []string{"/var/log/*", "/var/log/*/*"}
 	}
 }
 

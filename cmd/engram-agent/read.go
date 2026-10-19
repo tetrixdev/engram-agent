@@ -300,6 +300,8 @@ type Enrolment struct {
 	URL         string `json:"url,omitempty"`
 	AgentID     string `json:"agent_id,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
+	Report      string `json:"report_state,omitempty"` // ok, retrying, removed, unauthorized, clock, not_enrolled
+	LastReport  string `json:"last_report,omitempty"`  // when Engram last accepted a report
 	Note        string `json:"note,omitempty"`
 }
 
@@ -314,7 +316,7 @@ func cmdStatus(args []string, out, errOut io.Writer) error {
 		return err
 	}
 	defer s.Close()
-	st := Status{Version: Version, DB: cfg.DB, Now: map[string]float64{}, Enrolment: enrolmentOf(cfg)}
+	st := Status{Version: Version, DB: cfg.DB, Now: map[string]float64{}, Enrolment: enrolmentOf(cfg, s.Meta)}
 	for _, f := range []string{cfg.DB, cfg.DB + "-wal"} {
 		if fi, err := os.Stat(f); err == nil {
 			st.DBBytes += fi.Size()
@@ -350,8 +352,19 @@ func printStatus(out io.Writer, st Status) {
 	e := st.Enrolment
 	if e.Enrolled {
 		fmt.Fprintf(out, "enrolled with %s as %s\nfingerprint %s\n", e.URL, e.AgentID, e.Fingerprint)
+		rs := e.Report
+		if rs == "" {
+			rs = "no report yet"
+		}
+		if e.LastReport != "" {
+			rs += ", last accepted " + e.LastReport
+		}
+		fmt.Fprintf(out, "reporting: %s\n", rs)
+		if e.Note != "" {
+			fmt.Fprintf(out, "  %s\n", e.Note)
+		}
 	} else {
-		fmt.Fprintf(out, "not enrolled: %s\n", e.Note)
+		fmt.Fprintf(out, "%s\n", e.Note)
 	}
 	fmt.Fprintf(out, "history %s (%s MB)\n", st.DB, trimFloat(float64(st.DBBytes)/(1<<20)))
 	if st.SampleAt == nil {
