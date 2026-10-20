@@ -1,13 +1,18 @@
 #!/bin/sh
 # Install, update or remove engram-agent on this server. Run as root.
 #
-#   install.sh --binary ./engram-agent [--sha256 HEX] [--ssh-user NAME]... [--url ORIGIN --code CODE]
-#   install.sh --binary https://.../engram-agent-linux-amd64 --sha256 HEX ...
+#   install.sh --version vX.Y.Z [--sha256 HEX] [--ssh-user NAME]... [--url ORIGIN --code CODE]
+#   install.sh --binary ./engram-agent [--sha256 HEX] ...
 #   install.sh --uninstall [--purge]
 #
-# --binary    the engram-agent binary: a local path, or an https URL (then
-#             --sha256 is required). Leave it out to keep the installed one.
+# --version   a release of github.com/tetrixdev/engram-agent: downloads that
+#             release's binary for this architecture and its SHA256SUMS, and
+#             stops unless the binary's sha256 is the one SHA256SUMS lists.
+#             The usual way to install and to update.
+# --binary    instead: a binary you have, a local path, or an https URL (then
+#             --sha256 is required). Give neither to keep the installed one.
 # --sha256    the binary's expected sha256; the install stops on a mismatch.
+#             With --version it is checked as well as SHA256SUMS.
 # --ssh-user  a login that may run the read commands (status, query, ...):
 #             added to group engram-agent. Repeatable.
 # --url/--code  enrol with Engram: the origin and the one-time code from the
@@ -15,7 +20,8 @@
 # --uninstall stop and remove the service and the binary; the history, the
 #             identity and the user stay, unless --purge is also given.
 #
-# Running it again is safe: it converges on the same result.
+# Running it again is safe: it converges on the same result. Nothing updates
+# by itself: an update is this command again with a newer --version.
 set -eu
 
 BIN_DST=/usr/local/bin/engram-agent
@@ -23,14 +29,16 @@ UNIT_DST=/etc/systemd/system/engram-agent.service
 STATE=/var/lib/engram-agent
 CONF_DIR=/etc/engram-agent
 USER_NAME=engram-agent
+RELEASES=https://github.com/tetrixdev/engram-agent/releases
 
-binary="" sha="" url="" code="" uninstall=0 purge=0 ssh_users=""
+binary="" version="" sha="" url="" code="" uninstall=0 purge=0 ssh_users=""
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 say() { echo "engram-agent: $*"; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
+	--version) version="${2:?--version needs a release tag, e.g. v0.1.0}"; shift 2 ;;
 	--binary) binary="${2:?--binary needs a path or URL}"; shift 2 ;;
 	--sha256) sha="${2:?--sha256 needs a value}"; shift 2 ;;
 	--ssh-user) ssh_users="$ssh_users ${2:?--ssh-user needs a name}"; shift 2 ;;
@@ -38,10 +46,18 @@ while [ $# -gt 0 ]; do
 	--code) code="${2:?--code needs the enrolment code}"; shift 2 ;;
 	--uninstall) uninstall=1; shift ;;
 	--purge) purge=1; shift ;;
-	-h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+	-h|--help) sed -n '2,25p' "$0"; exit 0 ;;
 	*) die "unknown argument $1 (--help lists them)" ;;
 	esac
 done
+
+if [ -n "$version" ]; then
+	[ -z "$binary" ] || die "give --version or --binary, not both"
+	case "$version" in
+	v[0-9]*.[0-9]*.[0-9]*) ;;
+	*) die "--version $version: expected a release tag such as v0.1.0" ;;
+	esac
+fi
 
 [ "$(id -u)" = 0 ] || die "run as root (sudo sh install.sh ...)"
 
@@ -89,36 +105,60 @@ done
 install -d -m 0755 "$CONF_DIR"
 
 # The binary.
+fetch() { # fetch URL FILE
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --proto '=https' -o "$2" "$1"
+	elif command -v wget >/dev/null 2>&1; then wget -q --https-only -O "$2" "$1"
+	else die "neither curl nor wget is installed"; fi
+}
 changed=0
-if [ -n "$binary" ]; then
+if [ -n "$version" ] || [ -n "$binary" ]; then
 	tmp=$(mktemp)
-	trap 'rm -f "$tmp"' EXIT
-	case "$binary" in
-	https://*|http://*)
-		[ -n "$sha" ] || die "a downloaded binary needs --sha256"
-		if command -v curl >/dev/null 2>&1; then curl -fsSL --proto '=https' -o "$tmp" "$binary"
-		elif command -v wget >/dev/null 2>&1; then wget -q -O "$tmp" "$binary"
-		else die "neither curl nor wget is installed"; fi ;;
-	*)
-		[ -f "$binary" ] || die "--binary $binary: no such file"
-		cp "$binary" "$tmp" ;;
-	esac
+	sums=$(mktemp)
+	trap 'rm -f "$tmp" "$sums"' EXIT
+	if [ -n "$version" ]; then
+		case "$(uname -m)" in
+		x86_64|amd64) arch=amd64 ;;
+		aarch64|arm64) arch=arm64 ;;
+		*) die "no release binary for $(uname -m); build one and give --binary" ;;
+		esac
+		asset="engram-agent-linux-$arch"
+		base="$RELEASES/download/$version"
+		fetch "$base/SHA256SUMS" "$sums" || die "could not download $base/SHA256SUMS (is $version a release?)"
+		listed=$(awk -v f="$asset" '$2 == f || $2 == "*" f { print $1 }' "$sums")
+		[ -n "$listed" ] || die "SHA256SUMS of $version lists no $asset"
+		[ -z "$sha" ] || [ "$sha" = "$listed" ] || die "--sha256 $sha is not what SHA256SUMS of $version lists ($listed)"
+		sha=$listed
+		fetch "$base/$asset" "$tmp" || die "could not download $base/$asset"
+	else
+		case "$binary" in
+		https://*|http://*)
+			[ -n "$sha" ] || die "a downloaded binary needs --sha256"
+			fetch "$binary" "$tmp" ;;
+		*)
+			[ -f "$binary" ] || die "--binary $binary: no such file"
+			cp "$binary" "$tmp" ;;
+		esac
+	fi
 	if [ -n "$sha" ]; then
 		got=$(sha256sum "$tmp" | cut -d' ' -f1)
 		[ "$got" = "$sha" ] || die "sha256 mismatch: expected $sha, got $got"
+		say "sha256 checked: $got"
 	fi
 	chmod 0755 "$tmp"
 	"$tmp" version >/dev/null 2>&1 || die "the binary does not run here (wrong architecture? this is $(uname -m))"
+	if [ -n "$version" ] && [ "v$("$tmp" version)" != "$version" ]; then
+		die "the binary of $version says it is v$("$tmp" version)"
+	fi
 	if ! cmp -s "$tmp" "$BIN_DST" 2>/dev/null; then
 		install -m 0755 -o root -g root "$tmp" "$BIN_DST"
 		changed=1
 		say "installed $("$BIN_DST" version) at $BIN_DST"
 	fi
 fi
-[ -x "$BIN_DST" ] || die "no binary at $BIN_DST: give --binary"
+[ -x "$BIN_DST" ] || die "no binary at $BIN_DST: give --version (or --binary)"
 
 # The unit: the copy beside this script, else the one embedded below (kept
-# identical by agent/packaging/packaging_test.go). Groups this system lacks are
+# identical by packaging/packaging_test.go). Groups this system lacks are
 # left out of SupplementaryGroups, or systemd would refuse to start it.
 here=$(dirname "$0")
 unit=$(mktemp)
@@ -128,10 +168,10 @@ else
 	cat >"$unit" <<'UNIT'
 # engram-agent: collects this server's health into /var/lib/engram-agent and
 # (once enrolled) reports it to Engram. Unprivileged, read-only on the system,
-# no listening socket. Installed by agent/packaging/install.sh.
+# no listening socket. Installed by packaging/install.sh.
 [Unit]
 Description=Engram server agent (health history, reports to Engram)
-Documentation=https://github.com/tetrixdev/engram/tree/main/agent
+Documentation=https://github.com/tetrixdev/engram-agent
 After=network-online.target
 Wants=network-online.target
 

@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/collect"
-	"github.com/tetrixdev/engram/agent/internal/identity"
-	"github.com/tetrixdev/engram/agent/internal/store"
+	"github.com/tetrixdev/engram-agent/internal/collect"
+	"github.com/tetrixdev/engram-agent/internal/identity"
+	"github.com/tetrixdev/engram-agent/internal/store"
 )
 
 // fakeEngram is an Engram stand-in: it checks what the protocol says it

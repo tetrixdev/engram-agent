@@ -1,0 +1,6 @@
+dist/
+/engram-agent
+engram-agent-linux-*
+
+# Agent worktrees are scratch checkouts, never part of the repository.
+.claude/

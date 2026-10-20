@@ -13,8 +13,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/config"
-	"github.com/tetrixdev/engram/agent/internal/store"
+	"github.com/tetrixdev/engram-agent/internal/config"
+	"github.com/tetrixdev/engram-agent/internal/store"
 )
 
 // now is the clock of every command; tests replace it.

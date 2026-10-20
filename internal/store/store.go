@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/collect"
+	"github.com/tetrixdev/engram-agent/internal/collect"
 	_ "modernc.org/sqlite" // pure Go SQLite: the binary stays static (CGO_ENABLED=0)
 )
 

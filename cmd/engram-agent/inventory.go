@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/inventory"
-	"github.com/tetrixdev/engram/agent/internal/logs"
+	"github.com/tetrixdev/engram-agent/internal/inventory"
+	"github.com/tetrixdev/engram-agent/internal/logs"
 )
 
 func cmdInventory(args []string, out, errOut io.Writer) error {

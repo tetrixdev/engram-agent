@@ -13,13 +13,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/alerts"
-	"github.com/tetrixdev/engram/agent/internal/collect"
-	"github.com/tetrixdev/engram/agent/internal/config"
-	"github.com/tetrixdev/engram/agent/internal/identity"
-	"github.com/tetrixdev/engram/agent/internal/inventory"
-	"github.com/tetrixdev/engram/agent/internal/report"
-	"github.com/tetrixdev/engram/agent/internal/store"
+	"github.com/tetrixdev/engram-agent/internal/alerts"
+	"github.com/tetrixdev/engram-agent/internal/collect"
+	"github.com/tetrixdev/engram-agent/internal/config"
+	"github.com/tetrixdev/engram-agent/internal/identity"
+	"github.com/tetrixdev/engram-agent/internal/inventory"
+	"github.com/tetrixdev/engram-agent/internal/report"
+	"github.com/tetrixdev/engram-agent/internal/store"
 )
 
 // Meta keys the agent keeps in the history file.

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/collect"
+	"github.com/tetrixdev/engram-agent/internal/collect"
 )
 
 // MaxPoints bounds what one query returns, whatever it asks for.

@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/agent"
-	"github.com/tetrixdev/engram/agent/internal/store"
+	"github.com/tetrixdev/engram-agent/internal/agent"
+	"github.com/tetrixdev/engram-agent/internal/store"
 )
 
 // Interval is how often the collector samples.

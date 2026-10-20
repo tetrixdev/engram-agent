@@ -1,9 +1,9 @@
 # engram-agent: collects this server's health into /var/lib/engram-agent and
 # (once enrolled) reports it to Engram. Unprivileged, read-only on the system,
-# no listening socket. Installed by agent/packaging/install.sh.
+# no listening socket. Installed by packaging/install.sh.
 [Unit]
 Description=Engram server agent (health history, reports to Engram)
-Documentation=https://github.com/tetrixdev/engram/tree/main/agent
+Documentation=https://github.com/tetrixdev/engram-agent
 After=network-online.target
 Wants=network-online.target
 

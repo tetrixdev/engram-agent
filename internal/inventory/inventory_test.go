@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tetrixdev/engram/agent/internal/collect"
+	"github.com/tetrixdev/engram-agent/internal/collect"
 )
 
 func write(t *testing.T, root, rel, content string, mode os.FileMode) {

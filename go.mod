@@ -1,4 +1,4 @@
-module github.com/tetrixdev/engram/agent
+module github.com/tetrixdev/engram-agent
 
 go 1.24.0
 

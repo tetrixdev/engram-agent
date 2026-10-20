@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/identity"
-	"github.com/tetrixdev/engram/agent/internal/inventory"
+	"github.com/tetrixdev/engram-agent/internal/identity"
+	"github.com/tetrixdev/engram-agent/internal/inventory"
 )
 
 // States the reporter is in, as `status` shows them.

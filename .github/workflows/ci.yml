@@ -1,0 +1,132 @@
+name: CI
+
+# Every push and pull request: formatting, vet, the tests and both static
+# builds. A tag vX.Y.Z also publishes a GitHub release: the two binaries, the
+# installer and the unit, a SHA256SUMS over them, and a signed build
+# provenance attestation per file (Sigstore, keyless: GitHub vouches over
+# OIDC that this workflow built these bytes from this commit).
+#
+# Read-only by default; only the release job may write, and only on a tag.
+permissions: read-all
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Actions pinned to a commit SHA: a moved tag cannot change what runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Formatted
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - run: go vet ./...
+
+      - run: go test ./...
+
+      - name: Installer parses
+        run: sh -n packaging/install.sh
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false   # a release is built from a clean module cache
+
+      # The version the binary reports is the tag without its v; off a tag it
+      # is 0.0.0-<short sha>, so a build from main is never taken for a release.
+      - name: Version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            v="${GITHUB_REF_NAME#v}"
+            printf '%s' "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::tag ${GITHUB_REF_NAME} is not vX.Y.Z"; exit 1; }
+          else
+            v="0.0.0-$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Static builds, amd64 and arm64
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir dist
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH=$arch go build -trimpath -buildvcs=false \
+              -ldflags "-s -w -buildid= -X main.Version=${VERSION}" \
+              -o "dist/engram-agent-linux-$arch" ./cmd/engram-agent
+          done
+          file dist/engram-agent-linux-*
+          file dist/engram-agent-linux-amd64 | grep -q 'statically linked'
+          file dist/engram-agent-linux-arm64 | grep -q 'statically linked'
+          test "$(dist/engram-agent-linux-amd64 version)" = "${VERSION}"
+          cp packaging/install.sh packaging/engram-agent.service dist/
+          cd dist && sha256sum engram-agent-linux-amd64 engram-agent-linux-arm64 install.sh engram-agent.service > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write        # create the release
+      id-token: write        # sign the attestation (Sigstore, keyless)
+      attestations: write    # store it with GitHub
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist
+
+      - name: Checksums still match
+        run: cd dist && sha256sum --check SHA256SUMS
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<NOTES
+          Install or update on a server, as root (it downloads this release's binary for the server's architecture and stops unless its sha256 is the one in SHA256SUMS):
+
+          \`\`\`sh
+          curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh
+          sudo sh install.sh --version ${GITHUB_REF_NAME}
+          \`\`\`
+
+          Verify a file was built by this repository's workflow from this tag (on any machine with the GitHub CLI):
+
+          \`\`\`sh
+          gh attestation verify engram-agent-linux-amd64 --repo ${GITHUB_REPOSITORY}
+          \`\`\`
+          NOTES
+          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" --notes-file notes.md --verify-tag \
+            dist/engram-agent-linux-amd64 dist/engram-agent-linux-arm64 \
+            dist/install.sh dist/engram-agent.service dist/SHA256SUMS

@@ -9,10 +9,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/config"
-	"github.com/tetrixdev/engram/agent/internal/identity"
-	"github.com/tetrixdev/engram/agent/internal/inventory"
-	"github.com/tetrixdev/engram/agent/internal/report"
+	"github.com/tetrixdev/engram-agent/internal/config"
+	"github.com/tetrixdev/engram-agent/internal/identity"
+	"github.com/tetrixdev/engram-agent/internal/inventory"
+	"github.com/tetrixdev/engram-agent/internal/report"
 )
 
 func cmdEnrol(args []string, out, errOut io.Writer) error {

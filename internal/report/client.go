@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/collect"
-	"github.com/tetrixdev/engram/agent/internal/identity"
-	"github.com/tetrixdev/engram/agent/internal/inventory"
+	"github.com/tetrixdev/engram-agent/internal/collect"
+	"github.com/tetrixdev/engram-agent/internal/identity"
+	"github.com/tetrixdev/engram-agent/internal/inventory"
 )
 
 // MaxBody is the most a report may carry (the protocol's 256 KB).

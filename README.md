@@ -2,7 +2,7 @@
 
 A small program that runs on a Linux server, keeps a history of how that
 server is doing, and answers questions about it. It is the server half of
-Engram's server management (decision 0355): it **reads** the host
+Engram's server management: it **reads** the host
 and **sends** to Engram, and does nothing else. Doing things on a server
 goes over SSH, never through the agent.
 
@@ -212,14 +212,45 @@ Also:
 
 ## Install, update, uninstall
 
-[`packaging/install.sh`](packaging/install.sh), as root, on the server:
+Releases are published on GitHub
+([releases](https://github.com/tetrixdev/engram-agent/releases)), built by
+this repository's workflow from a version tag. Each holds the two binaries,
+`install.sh`, the systemd unit, and `SHA256SUMS` over all four. Nothing is
+downloaded or updated by itself: a server runs the version someone installed
+on it, until someone installs another.
+
+As root, on the server, for release `v0.1.0`:
 
 ```sh
-sh install.sh --binary ./engram-agent-linux-amd64 --sha256 <hex> --ssh-user deploy
-sh install.sh --binary https://example.org/engram-agent-linux-amd64 --sha256 <hex>   # a URL needs --sha256
-sh install.sh --uninstall            # service and binary go; history, identity and user stay
-sh install.sh --uninstall --purge    # and those too
+curl -fsSLO https://github.com/tetrixdev/engram-agent/releases/download/v0.1.0/install.sh
+sudo sh install.sh --version v0.1.0 --ssh-user deploy
 ```
+
+`--version` downloads that release's `SHA256SUMS` and the binary for this
+machine's architecture, and stops unless the binary's sha256 is the one
+`SHA256SUMS` lists and the binary reports that version. `--sha256 <hex>` pins
+the expected value as well, for whoever took it from somewhere other than the
+release itself.
+
+```sh
+sudo sh install.sh --version v0.2.0                 # update: the same command with a newer release
+sudo sh install.sh --binary ./engram-agent-linux-amd64 --sha256 <hex>   # a binary you built
+sudo sh install.sh --uninstall                      # service and binary go; history, identity and user stay
+sudo sh install.sh --uninstall --purge              # and those too
+```
+
+### Verifying a release
+
+- **Checksums.** `sha256sum --check --ignore-missing SHA256SUMS` beside the
+  downloaded files; `install.sh --version` does this for the binary.
+- **Who built it.** Every file in a release carries a build provenance
+  attestation, signed keylessly through Sigstore: GitHub vouches that this
+  repository's workflow built those exact bytes from that tag's commit. Check
+  one on any machine with the GitHub CLI:
+  `gh attestation verify engram-agent-linux-amd64 --repo tetrixdev/engram-agent`
+  (or `install.sh`, or any other asset).
+- **Releases cannot change.** The repository has GitHub's immutable releases
+  on: once published, a release's tag and files cannot be replaced.
 
 It creates the system user and group `engram-agent` (no home, no login
 shell), adds it to `systemd-journal` and `adm` where those exist, creates
@@ -234,7 +265,6 @@ its own); the running service notices the new identity within a minute.
 ## Building and testing
 
 ```sh
-cd agent
 go vet ./... && go test ./...
 CGO_ENABLED=0 GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o engram-agent-linux-arm64 ./cmd/engram-agent
 ```
@@ -248,8 +278,8 @@ and every command against the real `/proc` of the machine running them. The
 report loop runs against a stand-in Engram (`httptest`) that verifies every
 signature; one test enrols the real binary's code path with it and runs the
 service until a signed `server.observed` arrives. CI
-runs the same and builds both architectures (job `agent` in
-`.github/workflows/test.yml`).
+runs the same and builds both architectures (`.github/workflows/ci.yml`); a
+tag `vX.Y.Z` also publishes the release.
 
 **Dependencies**: one, `modernc.org/sqlite`, a pure-Go SQLite, so the binary
 stays static and builds for arm64 without a C cross-compiler. Everything else
@@ -430,9 +460,8 @@ containment.
 
 ## Not built yet
 
-- Signed releases and self-update. They need a release on GitHub and a signing
-  key built into the installer, which is a decision for the owner; until then a
-  binary is built from this directory and installed with its sha256.
+- Self-update, on purpose: a server changes version only when someone runs
+  `install.sh --version` on it.
 - Firewall rules, process names on ports, `sshd -T`, container names and
   authorized_keys: they need root or the docker socket, so the Servers app
   reads them over SSH.

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/collect"
+	"github.com/tetrixdev/engram-agent/internal/collect"
 )
 
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }

@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/collect"
+	"github.com/tetrixdev/engram-agent/internal/collect"
 )
 
 // Env is where the inventory reads: the filesystem root (for /etc and /var),

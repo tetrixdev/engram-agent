@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tetrixdev/engram/agent/internal/collect"
-	"github.com/tetrixdev/engram/agent/internal/config"
-	"github.com/tetrixdev/engram/agent/internal/identity"
-	"github.com/tetrixdev/engram/agent/internal/inventory"
-	"github.com/tetrixdev/engram/agent/internal/report"
-	"github.com/tetrixdev/engram/agent/internal/store"
+	"github.com/tetrixdev/engram-agent/internal/collect"
+	"github.com/tetrixdev/engram-agent/internal/config"
+	"github.com/tetrixdev/engram-agent/internal/identity"
+	"github.com/tetrixdev/engram-agent/internal/inventory"
+	"github.com/tetrixdev/engram-agent/internal/report"
+	"github.com/tetrixdev/engram-agent/internal/store"
 )
 
 type world struct {
