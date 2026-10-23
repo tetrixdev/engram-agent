@@ -2,7 +2,10 @@ package snapshot
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -273,6 +276,24 @@ func keyLine(t *testing.T, typ string, seed byte) (string, string) {
 	return typ + " " + base64.StdEncoding.EncodeToString(blob), "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
+// ecdsaLine is a real ecdsa-sha2-nistp256 key line (a fresh P-256 key:
+// the curve name and the uncompressed point) and its fingerprint.
+func ecdsaLine(t *testing.T) (string, string) {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk, err := k.PublicKey.ECDH()
+	if err != nil {
+		t.Fatal(err)
+	}
+	str := func(b []byte, x []byte) []byte { return append(binary.BigEndian.AppendUint32(b, uint32(len(x))), x...) }
+	blob := str(str(str(nil, []byte("ecdsa-sha2-nistp256")), []byte("nistp256")), pk.Bytes())
+	sum := sha256.Sum256(blob)
+	return "ecdsa-sha2-nistp256 " + base64.StdEncoding.EncodeToString(blob), "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
+}
+
 func make32(b byte) []byte {
 	s := make([]byte, 32)
 	for i := range s {
@@ -283,7 +304,7 @@ func make32(b byte) []byte {
 
 func TestParseKeyLine(t *testing.T) {
 	k1, fp1 := keyLine(t, "ssh-ed25519", 1)
-	k2, fp2 := keyLine(t, "ecdsa-sha2-nistp256", 2)
+	k2, fp2 := ecdsaLine(t)
 	cases := []struct {
 		line string
 		ok   bool
@@ -330,7 +351,7 @@ func fixtureRoot(t *testing.T) (string, map[string]string) {
 	w("etc/sudoers.d/backup~", "ops ALL=(ALL) NOPASSWD: ALL\n")
 	k1, fp1 := keyLine(t, "ssh-ed25519", 1)
 	k2, fp2 := keyLine(t, "ssh-ed25519", 2)
-	k3, fp3 := keyLine(t, "ecdsa-sha2-nistp256", 3)
+	k3, fp3 := ecdsaLine(t)
 	w("home/jasper/.ssh/authorized_keys", "# my keys\n"+k1+" jasper@laptop\n\nnot a key at all\n"+`from="100.64.0.0/10" `+k2+"\n")
 	w("home/deploy/.ssh/authorized_keys2", k3+" ci\n")
 	w("root/.ssh/authorized_keys", "")
