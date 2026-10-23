@@ -1,0 +1,48 @@
+# engram-agent-snapshot: as root, every 5 minutes (engram-agent-snapshot.timer),
+# reads what the unprivileged agent cannot (the firewall, the docker socket,
+# sudoers, authorized_keys, tailscale's status) into one file the agent
+# reads. No input, no network connection, one file written. Installed by
+# packaging/install.sh.
+[Unit]
+Description=Engram server agent: root snapshot (firewall, containers, users, SSH keys, Tailscale)
+Documentation=https://github.com/tetrixdev/engram-agent
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/engram-agent snapshot
+User=root
+UMask=0027
+TimeoutStartSec=60
+
+# Hardening: it reads, and writes only /var/lib/engram-agent-snapshot.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/engram-agent-snapshot
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# The firewall is read over netlink (iptables-legacy opens a raw AF_INET
+# socket); IPAddressDeny keeps every packet off the network. Not
+# PrivateNetwork: that would read an empty namespace's firewall.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+IPAddressDeny=any
+SocketBindDeny=any
+# Root, but only these: reading the netfilter tables, and reading users'
+# authorized_keys in home directories it does not own.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+
+MemoryMax=128M
+Nice=10

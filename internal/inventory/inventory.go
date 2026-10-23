@@ -126,7 +126,7 @@ type Kernel struct {
 }
 
 // Sections lists what `inventory --section` accepts.
-var Sections = []string{"summary", "os", "kernel", "packages", "updates", "services", "ports", "users", "ssh", "containers"}
+var Sections = []string{"summary", "os", "kernel", "packages", "updates", "services", "ports", "users", "ssh", "containers", "state"}
 
 // OSRelease is PRETTY_NAME (or NAME VERSION) of /etc/os-release.
 func (e Env) OSRelease() string {
@@ -455,7 +455,7 @@ func isLoopback(a string) bool {
 }
 
 // EphemeralRange is the kernel's local port range: a listener inside it is
-// most likely a passing one, so new_port findings ignore it.
+// most likely a passing one, so the ports section leaves such UDP ports out.
 func (e Env) EphemeralRange() (int, int) {
 	f := strings.Fields(firstLine(filepath.Join(e.Proc, "sys/net/ipv4/ip_local_port_range")))
 	if len(f) == 2 {
@@ -678,6 +678,8 @@ type Full struct {
 	Ports    []Port
 	SSH      SSH
 	Errors   []string
+	// PackagesErr is why dpkg's status file could not be read, if it could not.
+	PackagesErr error
 }
 
 // Collect gathers the inventory. withUpdates runs apt's simulation, which
@@ -687,6 +689,7 @@ func (e Env) Collect(ctx context.Context, version string, withUpdates bool) Full
 	pkgs, err := e.Packages()
 	if err != nil {
 		f.Errors = append(f.Errors, "packages: "+err.Error())
+		f.PackagesErr = err
 	}
 	f.Packages = pkgs
 	f.Kernel = e.Kernel(pkgs)

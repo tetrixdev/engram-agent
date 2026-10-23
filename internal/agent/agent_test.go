@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/tetrixdev/engram-agent/internal/identity"
 	"github.com/tetrixdev/engram-agent/internal/inventory"
 	"github.com/tetrixdev/engram-agent/internal/report"
+	"github.com/tetrixdev/engram-agent/internal/state"
 	"github.com/tetrixdev/engram-agent/internal/store"
 )
 
@@ -60,7 +63,32 @@ func newAgent(t *testing.T) (*Agent, *world) {
 		},
 		Statfs: func(string) (collect.FsStat, error) { return collect.FsStat{}, nil },
 	}
+	a.Interfaces = func() ([]state.Iface, error) {
+		return []state.Iface{{Name: "eth0", Addrs: []net.IP{net.ParseIP("203.0.113.10")}}}, nil
+	}
 	return a, w
+}
+
+// others are the events that are not state.observed.
+func others(evs []report.Event) []report.Event {
+	var out []report.Event
+	for _, e := range evs {
+		if e.Type != "state.observed" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// stateRefs are the refs of the state.observed events.
+func stateRefs(evs []report.Event) []string {
+	var out []string
+	for _, e := range evs {
+		if e.Type == "state.observed" {
+			out = append(out, e.Ref)
+		}
+	}
+	return out
 }
 
 func events(t *testing.T, ob *report.Outbox) []report.Event {
@@ -94,22 +122,32 @@ func TestEventsFollowTheInventory(t *testing.T) {
 		t.Fatal("a new enrolment did not ask for an inventory")
 	}
 	a.Inventory(ctx, false)
-	if got := types(events(t, a.Outbox)); len(got) != 1 || got[0] != "server.observed host" {
+	first := events(t, a.Outbox)
+	if got := types(others(first)); len(got) != 1 || got[0] != "server.observed host" {
 		t.Fatalf("first inventory: %v", got)
+	}
+	// Without a snapshot only the agent's own sections and the snapshot's status go.
+	if got := stateRefs(first); !reflect.DeepEqual(got, []string{"state:packages:1", "state:network", "state:ports", "state:snapshot"}) {
+		t.Fatalf("first state: %v", got)
 	}
 	// Nothing changed: nothing sent.
 	a.Inventory(ctx, false)
 	if got := events(t, a.Outbox); len(got) != 0 {
 		t.Fatalf("unchanged: %v", types(got))
 	}
-	// A unit fails and a new port opens: summary changes, two findings open.
+	// A unit fails and a port opens: summary changes, a finding opens, the
+	// ports section is sent again; no new_port finding any more.
 	w.failed = "nginx.service loaded failed failed nginx\n"
 	w.file(t, "proc/net/tcp", "  sl local rem st\n   0: 00000000:0016 00000000:0000 0A 0 0 0 0 0 1 1\n   1: 00000000:0050 00000000:0000 0A 0 0 0 0 0 1 1\n")
 	a.Inventory(ctx, false)
-	got := events(t, a.Outbox)
-	want := []string{"server.observed host", "finding.opened failed_unit:nginx.service", "finding.opened new_port:tcp/80"}
-	if len(got) != 3 || types(got)[0] != want[0] || types(got)[1] != want[1] || types(got)[2] != want[2] {
+	all := events(t, a.Outbox)
+	got := others(all)
+	want := []string{"server.observed host", "finding.opened failed_unit:nginx.service"}
+	if len(got) != 2 || types(got)[0] != want[0] || types(got)[1] != want[1] {
 		t.Fatalf("after changes: %v", types(got))
+	}
+	if refs := stateRefs(all); !reflect.DeepEqual(refs, []string{"state:ports"}) {
+		t.Fatalf("state after a new port: %v", refs)
 	}
 	var f inventory.Finding
 	json.Unmarshal(got[1].State, &f)
@@ -119,7 +157,7 @@ func TestEventsFollowTheInventory(t *testing.T) {
 	// The unit recovers: resolved, with the since it was opened with.
 	w.failed = ""
 	a.Inventory(ctx, false)
-	got = events(t, a.Outbox)
+	got = others(events(t, a.Outbox))
 	if len(got) != 2 || types(got)[1] != "finding.resolved failed_unit:nginx.service" {
 		t.Fatalf("after recovery: %v", types(got))
 	}
@@ -129,15 +167,18 @@ func TestEventsFollowTheInventory(t *testing.T) {
 		t.Fatalf("resolved since %s, opened %s", r.Since, f.Since)
 	}
 
-	// A new enrolment starts over: the port baseline is taken again (tcp/80 is
-	// now part of it, so it resolves nothing and opens nothing), and the
-	// summary is sent anew.
+	// A new enrolment starts over: the summary and the state are sent anew.
 	a.Outbox.Add("alert.raised", "stale", time.Now(), map[string]string{})
 	a.onIdentity(&identity.Identity{AgentID: "a-2", URL: "https://e.example.org"})
 	a.Inventory(ctx, false)
-	got = events(t, a.Outbox)
+	all = events(t, a.Outbox)
+	got = others(all)
 	if len(got) != 1 || types(got)[0] != "server.observed host" {
 		t.Fatalf("after re-enrolment: %v", types(got))
+	}
+	// and every state section anew.
+	if refs := stateRefs(all); len(refs) != 4 {
+		t.Fatalf("state after re-enrolment: %v", refs)
 	}
 }
 
