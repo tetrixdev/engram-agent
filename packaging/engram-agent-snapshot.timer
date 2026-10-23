@@ -1,0 +1,12 @@
+# Starts engram-agent-snapshot.service a minute after boot and every 5
+# minutes after it last ran. Installed by packaging/install.sh.
+[Unit]
+Description=Engram server agent: root snapshot every 5 minutes
+Documentation=https://github.com/tetrixdev/engram-agent
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

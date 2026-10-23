@@ -47,6 +47,12 @@ func NewKey() string {
 
 // Add queues an event with a new key.
 func (o *Outbox) Add(typ, ref string, at time.Time, state any) error {
+	return o.AddKeyed(typ, ref, NewKey(), at, state)
+}
+
+// AddKeyed queues an event with a key of the caller's: one whose key is
+// already queued is not queued twice.
+func (o *Outbox) AddKeyed(typ, ref, key string, at time.Time, state any) error {
 	b, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -54,8 +60,11 @@ func (o *Outbox) Add(typ, ref string, at time.Time, state any) error {
 	if len(b) > MaxStateBytes {
 		return fmt.Errorf("%s %s: state is %d bytes, over the %d the protocol allows", typ, ref, len(b), MaxStateBytes)
 	}
-	if _, err := o.db.Exec(`INSERT INTO outbox (key, type, ref, occurred_at, state) VALUES (?, ?, ?, ?, ?)`,
-		NewKey(), typ, ref, at.UTC().Format(time.RFC3339), string(b)); err != nil {
+	if key == "" || len(key) > 150 {
+		return fmt.Errorf("%s %s: the key must be 1 to 150 characters", typ, ref)
+	}
+	if _, err := o.db.Exec(`INSERT OR IGNORE INTO outbox (key, type, ref, occurred_at, state) VALUES (?, ?, ?, ?, ?)`,
+		key, typ, ref, at.UTC().Format(time.RFC3339), string(b)); err != nil {
 		return err
 	}
 	_, err = o.db.Exec(`DELETE FROM outbox WHERE seq <= (SELECT max(seq) FROM outbox) - ?`, MaxQueued)

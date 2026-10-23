@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -20,6 +21,8 @@ import (
 
 	"github.com/tetrixdev/engram-agent/internal/collect"
 	"github.com/tetrixdev/engram-agent/internal/identity"
+	"github.com/tetrixdev/engram-agent/internal/inventory"
+	"github.com/tetrixdev/engram-agent/internal/state"
 	"github.com/tetrixdev/engram-agent/internal/store"
 )
 
@@ -332,5 +335,56 @@ func TestRunKickSendsAtOnce(t *testing.T) {
 			t.Fatal("a kick did not send")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestChunkedStateGoesOut queues a package list cut into three parts of
+// almost 48 KB each, beside other events, and checks every part reaches
+// Engram in reports within the protocol's limits.
+func TestChunkedStateGoesOut(t *testing.T) {
+	g := newRig(t)
+	var pkgs []inventory.Package
+	for i := 0; i < 1200; i++ {
+		pkgs = append(pkgs, inventory.Package{Name: fmt.Sprintf("lib-package-number-%05d", i), Version: "1.2.3-4ubuntu0.24.04.1",
+			Source: fmt.Sprintf("package-source-%05d (1.2.3-4ubuntu0.24.04.1)", i), Arch: "amd64"})
+	}
+	evs := state.Packages(pkgs, map[string]bool{}, time.Now(), nil).Events(time.Now().Unix())
+	if len(evs) != 3 {
+		t.Fatalf("%d parts", len(evs))
+	}
+	g.add(t, 2)
+	want := map[string]bool{}
+	for _, ev := range evs {
+		if err := g.ob.AddKeyed("state.observed", ev.Ref, ev.Key, time.Now(), ev.State); err != nil {
+			t.Fatal(err)
+		}
+		want[ev.Key] = true
+	}
+	// Queuing the same key again adds nothing.
+	if err := g.ob.AddKeyed("state.observed", evs[0].Ref, evs[0].Key, time.Now(), evs[0].State); err != nil || g.ob.Count() != 5 {
+		t.Fatalf("requeue: %v, %d queued", err, g.ob.Count())
+	}
+	g.add(t, 1)
+	g.r.cycle(context.Background(), true)
+	if g.ob.Count() != 0 {
+		t.Fatalf("outbox %d; log %s", g.ob.Count(), g.log)
+	}
+	got := 0
+	for _, r := range g.f.reports {
+		b, _ := json.Marshal(r)
+		if len(b) > MaxBody || len(r.Events) > MaxEvents {
+			t.Fatalf("a report of %d bytes, %d events", len(b), len(r.Events))
+		}
+		for _, e := range r.Events {
+			if e.Type == "state.observed" {
+				if !want[e.Key] || len(e.State) >= state.MaxPartBytes {
+					t.Fatalf("part %s, %d bytes", e.Key, len(e.State))
+				}
+				got++
+			}
+		}
+	}
+	if got != 3 {
+		t.Fatalf("%d parts arrived in %d reports", got, len(g.f.reports))
 	}
 }

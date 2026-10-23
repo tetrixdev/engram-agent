@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tetrixdev/engram-agent/internal/inventory"
 	"github.com/tetrixdev/engram-agent/internal/logs"
+	"github.com/tetrixdev/engram-agent/internal/snapshot"
+	"github.com/tetrixdev/engram-agent/internal/state"
 )
 
 func cmdInventory(args []string, out, errOut io.Writer) error {
@@ -86,6 +90,26 @@ func inventorySection(ctx context.Context, env inventory.Env, section string) (a
 		return map[string]any{"ssh": env.SSHD(), "host_keys": env.SSHHostKeys()}, nil
 	case "containers":
 		return map[string]any{"containers": env.Containers(), "note": "running containers by short id, from their cgroups; names need the docker socket"}, nil
+	case "state":
+		// What the service sends as state.observed, built now as this user.
+		now := time.Now()
+		full := env.Collect(ctx, Version, false)
+		snap := state.ReadSnapshot(filepath.Join(env.Root, snapshot.DefaultDir, snapshot.FileName), now)
+		lo, hi := env.EphemeralRange()
+		out := map[string]any{}
+		for _, sec := range state.Collect(full, env.Root, lo, hi, state.HostInterfaces, snap, now) {
+			evs := sec.Events(now.Unix())
+			meta := sec.Meta
+			if len(meta) == 0 {
+				meta = []byte("{}")
+			}
+			items := sec.Items
+			if items == nil {
+				items = []json.RawMessage{}
+			}
+			out[sec.Name] = map[string]any{"sha256": sec.SHA256(), "parts": len(evs), "items": items, "meta": meta, "error": sec.Error}
+		}
+		return map[string]any{"sections": out, "snapshot": snap.Status}, nil
 	}
 	return nil, fmt.Errorf("unknown section %q: one of %s", section, strings.Join(inventory.Sections, ", "))
 }

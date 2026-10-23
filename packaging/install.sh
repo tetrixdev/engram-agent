@@ -17,8 +17,14 @@
 #             added to group engram-agent. Repeatable.
 # --url/--code  enrol with Engram: the origin and the one-time code from the
 #             Servers app. Needs a binary that has `engram-agent enrol`.
-# --uninstall stop and remove the service and the binary; the history, the
-#             identity and the user stay, unless --purge is also given.
+# --uninstall stop and remove the service, the snapshot timer and the binary;
+#             the history, the identity, the last snapshot and the user stay,
+#             unless --purge is also given.
+#
+# Besides the agent (unprivileged) it installs engram-agent-snapshot.service
+# and .timer: a root oneshot every 5 minutes that writes the firewall,
+# containers, users, SSH keys and Tailscale into
+# /var/lib/engram-agent-snapshot/state.json for the agent to read.
 #
 # Running it again is safe: it converges on the same result. Nothing updates
 # by itself: an update is this command again with a newer --version.
@@ -26,7 +32,10 @@ set -eu
 
 BIN_DST=/usr/local/bin/engram-agent
 UNIT_DST=/etc/systemd/system/engram-agent.service
+SNAP_SERVICE_DST=/etc/systemd/system/engram-agent-snapshot.service
+SNAP_TIMER_DST=/etc/systemd/system/engram-agent-snapshot.timer
 STATE=/var/lib/engram-agent
+SNAP_DIR=/var/lib/engram-agent-snapshot
 CONF_DIR=/etc/engram-agent
 USER_NAME=engram-agent
 RELEASES=https://github.com/tetrixdev/engram-agent/releases
@@ -46,7 +55,7 @@ while [ $# -gt 0 ]; do
 	--code) code="${2:?--code needs the enrolment code}"; shift 2 ;;
 	--uninstall) uninstall=1; shift ;;
 	--purge) purge=1; shift ;;
-	-h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+	-h|--help) sed -n '2,32p' "$0"; exit 0 ;;
 	*) die "unknown argument $1 (--help lists them)" ;;
 	esac
 done
@@ -65,17 +74,19 @@ has_systemd() { [ -d /run/systemd/system ]; }
 
 if [ "$uninstall" = 1 ]; then
 	if has_systemd; then
+		systemctl disable --now engram-agent-snapshot.timer 2>/dev/null || true
+		systemctl stop engram-agent-snapshot.service 2>/dev/null || true
 		systemctl disable --now engram-agent.service 2>/dev/null || true
 	fi
-	rm -f "$UNIT_DST" "$BIN_DST"
+	rm -f "$UNIT_DST" "$SNAP_SERVICE_DST" "$SNAP_TIMER_DST" "$BIN_DST"
 	has_systemd && systemctl daemon-reload || true
 	if [ "$purge" = 1 ]; then
-		rm -rf "$STATE" "$CONF_DIR"
+		rm -rf "$STATE" "$SNAP_DIR" "$CONF_DIR"
 		if id "$USER_NAME" >/dev/null 2>&1; then userdel "$USER_NAME" 2>/dev/null || true; fi
 		if getent group "$USER_NAME" >/dev/null 2>&1; then groupdel "$USER_NAME" 2>/dev/null || true; fi
-		say "removed, with its history, identity and user"
+		say "removed, with its history, identity, snapshot and user"
 	else
-		say "removed; history and identity kept in $STATE (--purge removes them and the user)"
+		say "removed; history and identity kept in $STATE, the last snapshot in $SNAP_DIR (--purge removes them and the user)"
 	fi
 	exit 0
 fi
@@ -103,6 +114,15 @@ for f in "$STATE"/history.db "$STATE"/history.db-wal "$STATE"/history.db-shm; do
 done
 [ -e "$STATE/agent.key" ] && chown "$USER_NAME:$USER_NAME" "$STATE/agent.key" && chmod 0600 "$STATE/agent.key"
 install -d -m 0755 "$CONF_DIR"
+
+# The snapshot's directory: root writes it, the agent's group reads it. It is
+# setgid, so the file root writes there has group engram-agent without a
+# chown (the snapshot runs without CAP_CHOWN). Not inside $STATE, which the
+# agent owns and could swap under root.
+install -d -m 2750 -o root -g "$USER_NAME" "$SNAP_DIR"
+chown root:"$USER_NAME" "$SNAP_DIR"
+chmod 2750 "$SNAP_DIR"
+if [ -e "$SNAP_DIR/state.json" ]; then chown root:"$USER_NAME" "$SNAP_DIR/state.json" && chmod 0640 "$SNAP_DIR/state.json"; fi
 
 # The binary.
 fetch() { # fetch URL FILE
@@ -202,7 +222,8 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK: listing the host's network interfaces and addresses.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
@@ -240,6 +261,92 @@ if ! cmp -s "$unit" "$UNIT_DST" 2>/dev/null; then
 fi
 rm -f "$unit"
 
+# The root snapshot's service and timer, likewise beside this script or
+# embedded below; only with a binary that has the snapshot command.
+snap=0 snap_changed=0
+if "$BIN_DST" help 2>&1 | grep -q '^  snapshot '; then
+	snap=1
+	for f in engram-agent-snapshot.service engram-agent-snapshot.timer; do
+		tmpu=$(mktemp)
+		if [ -f "$here/$f" ]; then
+			cp "$here/$f" "$tmpu"
+		elif [ "$f" = engram-agent-snapshot.service ]; then
+			cat >"$tmpu" <<'SNAPSERVICE'
+# engram-agent-snapshot: as root, every 5 minutes (engram-agent-snapshot.timer),
+# reads what the unprivileged agent cannot (the firewall, the docker socket,
+# sudoers, authorized_keys, tailscale's status) into one file the agent
+# reads. No input, no network connection, one file written. Installed by
+# packaging/install.sh.
+[Unit]
+Description=Engram server agent: root snapshot (firewall, containers, users, SSH keys, Tailscale)
+Documentation=https://github.com/tetrixdev/engram-agent
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/engram-agent snapshot
+User=root
+UMask=0027
+TimeoutStartSec=60
+
+# Hardening: it reads, and writes only /var/lib/engram-agent-snapshot.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/engram-agent-snapshot
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# The firewall is read over netlink (iptables-legacy opens a raw AF_INET
+# socket); IPAddressDeny keeps every packet off the network. Not
+# PrivateNetwork: that would read an empty namespace's firewall.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+IPAddressDeny=any
+SocketBindDeny=any
+# Root, but only these: reading the netfilter tables, and reading users'
+# authorized_keys in home directories it does not own.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+
+MemoryMax=128M
+Nice=10
+SNAPSERVICE
+		else
+			cat >"$tmpu" <<'SNAPTIMER'
+# Starts engram-agent-snapshot.service a minute after boot and every 5
+# minutes after it last ran. Installed by packaging/install.sh.
+[Unit]
+Description=Engram server agent: root snapshot every 5 minutes
+Documentation=https://github.com/tetrixdev/engram-agent
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+SNAPTIMER
+		fi
+		if ! cmp -s "$tmpu" "/etc/systemd/system/$f" 2>/dev/null; then
+			install -m 0644 "$tmpu" "/etc/systemd/system/$f"
+			snap_changed=1
+		fi
+		rm -f "$tmpu"
+	done
+else
+	say "this binary has no snapshot command; the root snapshot is not installed"
+fi
+
 # Enrol, as the agent's own user, so the key it makes is its own.
 if [ -n "$url" ] || [ -n "$code" ]; then
 	[ -n "$url" ] && [ -n "$code" ] || die "enrolling needs both --url and --code"
@@ -252,11 +359,19 @@ fi
 
 if has_systemd; then
 	systemctl daemon-reload
+	if [ "$snap" = 1 ]; then
+		# One snapshot now, so the agent finds it at once; then every 5 minutes.
+		if [ "$changed" = 1 ] || [ "$snap_changed" = 1 ] || [ ! -e "$SNAP_DIR/state.json" ]; then
+			systemctl start engram-agent-snapshot.service ||
+				say "the snapshot failed; see journalctl -u engram-agent-snapshot"
+		fi
+		systemctl enable --now engram-agent-snapshot.timer >/dev/null 2>&1
+	fi
 	systemctl enable engram-agent.service >/dev/null 2>&1
 	if [ "$changed" = 1 ] || ! systemctl is-active --quiet engram-agent.service; then
 		systemctl restart engram-agent.service
 	fi
-	say "running: systemctl status engram-agent; engram-agent status"
+	say "running: systemctl status engram-agent engram-agent-snapshot.timer; engram-agent status"
 else
 	say "installed; this system does not run systemd, so start it yourself: runuser -u $USER_NAME -- $BIN_DST run"
 fi

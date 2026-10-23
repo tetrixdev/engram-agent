@@ -2,7 +2,7 @@ name: CI
 
 # Every push and pull request: formatting, vet, the tests and both static
 # builds. A tag vX.Y.Z also publishes a GitHub release: the two binaries, the
-# installer and the unit, a SHA256SUMS over them, and a signed build
+# installer and the three units, a SHA256SUMS over them, and a signed build
 # provenance attestation per file (Sigstore, keyless: GitHub vouches over
 # OIDC that this workflow built these bytes from this commit).
 #
@@ -76,8 +76,9 @@ jobs:
           file dist/engram-agent-linux-amd64 | grep -q 'statically linked'
           file dist/engram-agent-linux-arm64 | grep -q 'statically linked'
           test "$(dist/engram-agent-linux-amd64 version)" = "${VERSION}"
-          cp packaging/install.sh packaging/engram-agent.service dist/
-          cd dist && sha256sum engram-agent-linux-amd64 engram-agent-linux-arm64 install.sh engram-agent.service > SHA256SUMS
+          cp packaging/install.sh packaging/engram-agent.service packaging/engram-agent-snapshot.service packaging/engram-agent-snapshot.timer dist/
+          cd dist && sha256sum engram-agent-linux-amd64 engram-agent-linux-arm64 install.sh engram-agent.service \
+            engram-agent-snapshot.service engram-agent-snapshot.timer > SHA256SUMS
           cat SHA256SUMS
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -129,4 +130,5 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" --notes-file notes.md --verify-tag \
             dist/engram-agent-linux-amd64 dist/engram-agent-linux-arm64 \
-            dist/install.sh dist/engram-agent.service dist/SHA256SUMS
+            dist/install.sh dist/engram-agent.service \
+            dist/engram-agent-snapshot.service dist/engram-agent-snapshot.timer dist/SHA256SUMS

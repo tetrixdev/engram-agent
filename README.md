@@ -8,8 +8,13 @@ goes over SSH, never through the agent.
 
 It keeps the history on the server, sends Engram a signed summary every
 minute and an alert the moment one is raised, takes an inventory of the
-server every five minutes, and answers the read commands that Engram's
-Servers app runs over SSH.
+server every five minutes and sends what changed in it (the observed state:
+packages, network, ports, firewall, containers, users, SSH keys, Tailscale),
+and answers the read commands that Engram's Servers app runs over SSH.
+
+Documentation follows the Engram documentation standard v1: the map is
+[docs/README.md](docs/README.md), the design [docs/architecture.md](docs/architecture.md),
+and the reasons [docs/decisions/](docs/decisions/).
 
 ## What it is, in one paragraph
 
@@ -22,26 +27,40 @@ enrolled, it POSTs a signed report to Engram every minute (host facts, the
 last minute's health, the events waiting) and an alert at once. The read
 commands (`status`, `peaks`, `top`, `query`, `metrics`, `inventory`, `logs`)
 run as whoever calls them; they are what a person runs on the box and what
-Engram's Servers app runs over SSH.
+Engram's Servers app runs over SSH. Beside the service, a systemd timer runs
+the same binary as root every 5 minutes (`engram-agent snapshot`) to read what
+the unprivileged agent cannot: the firewall, the containers, users and sudo,
+SSH key fingerprints and Tailscale, into one file the agent reads.
 
 ## Security posture
 
-- **Unprivileged.** It runs as `engram-agent`, with no capabilities, under
-  `NoNewPrivileges`, `ProtectSystem=strict` (it may write only
-  `/var/lib/engram-agent`), `ProtectHome=read-only`, `PrivateTmp`,
+- **Unprivileged.** The service runs as `engram-agent`, with no
+  capabilities, under `NoNewPrivileges`, `ProtectSystem=strict` (it may write
+  only `/var/lib/engram-agent`), `ProtectHome=read-only`, `PrivateTmp`,
   `PrivateDevices` and the rest of the unit's hardening
-  ([`packaging/engram-agent.service`](packaging/engram-agent.service)). There
-  is no root helper.
-- **No listening port.** It never opens a socket to listen on
-  (`SocketBindDeny=any`); its address families are limited to IPv4, IPv6 and
-  Unix.
+  ([`packaging/engram-agent.service`](packaging/engram-agent.service)).
+- **One root part, the snapshot, with no input and no network.**
+  `engram-agent snapshot` runs as root from a timer every 5 minutes
+  ([`packaging/engram-agent-snapshot.service`](packaging/engram-agent-snapshot.service)).
+  It keeps only `CAP_NET_ADMIN`, `CAP_NET_RAW` (reading netfilter) and
+  `CAP_DAC_READ_SEARCH` (reading users' `authorized_keys`), may make no IP
+  connection (`IPAddressDeny=any`; it talks only to local unix sockets and
+  netlink), takes no input, and writes exactly one file,
+  `/var/lib/engram-agent-snapshot/state.json`, under `ProtectSystem=strict`.
+  It never runs a command for anyone and has no listening socket either.
+  [Decision 0002](docs/decisions/0002-a-root-snapshot-and-the-observed-state-including-packages.md)
+  says why it is a separate oneshot rather than privilege for the agent.
+- **No listening port.** Neither ever opens a socket to listen on
+  (`SocketBindDeny=any`). The agent's address families are limited to IPv4,
+  IPv6, Unix and netlink (netlink to list the host's interfaces).
 - **Reads only.** It reads counters and the names of processes and units. It
   never reads a process's environment, open files or command line arguments,
   and never runs a command for anyone. There is no command channel.
 - **Sends only to Engram**: outbound HTTPS to the one origin it was enrolled
   with (plain http only to this machine, for tests). It sends health numbers,
-  host facts and events; **never log lines, file contents or the package
-  list** (only its count and sha256).
+  host facts, events and the observed state, the package list included;
+  **never log lines, file contents, secrets or a key** (SSH keys only as
+  their fingerprints, never the key itself).
 - **No bearer secret.** It holds an ed25519 private key (`agent.key`, 0600,
   never sent) and signs every report; Engram stores only the public key.
 - **Bounded.** `MemoryMax=256M`, `CPUQuota=20%`, `Nice=10`: a fault in the
@@ -50,7 +69,10 @@ Engram's Servers app runs over SSH.
   `engram-agent:engram-agent 0750` and the agent's files are created `0640`
   (`UMask=0027`), so the agent's user and the members of group
   `engram-agent` can read it, nobody else. `install.sh --ssh-user deploy` adds
-  the login the Servers app uses to that group.
+  the login the Servers app uses to that group. The snapshot's directory is
+  `root:engram-agent 2750` (setgid, so the file gets the group without a
+  chown) and its file `0640`: the same people can read it, only root writes
+  it, and the agent cannot replace the directory under root.
 
 ## What it collects
 
@@ -90,8 +112,8 @@ Names are short and stable; what follows the colon is the thing measured.
 - **Cgroups**: `docker-<first 12 hex of the container id>` for a container
   (systemd and cgroupfs drivers alike), and the unit name (`nginx.service`)
   for every service under `system.slice`. Container names need the docker
-  socket, which the agent does not have; the Servers app maps ids to names
-  over SSH.
+  socket, which the agent does not have; the snapshot's `containers` section
+  carries them (by name, not by id).
 - **Top processes**: the 10 highest by CPU and the 10 highest by resident
   memory, each with pid, command name (`comm`), user id, CPU % machine-wide and
   RSS in bytes. Kernel threads are skipped.
@@ -168,9 +190,10 @@ command takes `--db` and `--config` (default `/etc/engram-agent/config.json`).
 | `engram-agent top [--at TIME] [--json]` | the top 10 processes by CPU and by memory at the sample nearest that time (default the latest) |
 | `engram-agent query --json '<request>'` | one metric over a range |
 | `engram-agent metrics [--json]` | the metric names this host has recorded |
-| `engram-agent inventory [--section S] [--json]` | what is on the server, taken now as the calling user; see "Inventory" |
+| `engram-agent inventory [--section S] [--json]` | what is on the server, taken now as the calling user; see "Inventory". `--section state` shows the observed-state sections the service would send |
 | `engram-agent logs --unit U \| --container C \| --file F [--lines N] [--since T] [--grep TEXT] [--json]` | recent log lines, masked; see "Logs" |
 | `engram-agent enrol --url ORIGIN --code CODE [--force]` | enrol with Engram (as user `engram-agent`; `install.sh --url --code` does it) |
+| `engram-agent snapshot [--out DIR] [--json]` | as root: read the firewall, containers, users, SSH keys and Tailscale and write them to `DIR/state.json` (default `/var/lib/engram-agent-snapshot`); `--json` prints instead of writing. What the snapshot timer runs; see "The root snapshot" |
 | `engram-agent version` | the version |
 
 `query` takes `{"metric": "cpu_pct", "from": "-6h", "to": "now", "points": 120}`
@@ -215,7 +238,8 @@ Also:
 Releases are published on GitHub
 ([releases](https://github.com/tetrixdev/engram-agent/releases)), built by
 this repository's workflow from a version tag. Each holds the two binaries,
-`install.sh`, the systemd unit, and `SHA256SUMS` over all four. Nothing is
+`install.sh`, the three systemd units (`engram-agent.service`,
+`engram-agent-snapshot.service` and `.timer`), and `SHA256SUMS` over all six. Nothing is
 downloaded or updated by itself: a server runs the version someone installed
 on it, until someone installs another.
 
@@ -235,7 +259,7 @@ release itself.
 ```sh
 sudo sh install.sh --version v0.2.0                 # update: the same command with a newer release
 sudo sh install.sh --binary ./engram-agent-linux-amd64 --sha256 <hex>   # a binary you built
-sudo sh install.sh --uninstall                      # service and binary go; history, identity and user stay
+sudo sh install.sh --uninstall                      # service, snapshot timer and binary go; history, identity, last snapshot and user stay
 sudo sh install.sh --uninstall --purge              # and those too
 ```
 
@@ -254,11 +278,15 @@ sudo sh install.sh --uninstall --purge              # and those too
 
 It creates the system user and group `engram-agent` (no home, no login
 shell), adds it to `systemd-journal` and `adm` where those exist, creates
-`/var/lib/engram-agent` (`engram-agent:engram-agent 0750`), installs the binary
-at `/usr/local/bin/engram-agent` after checking its sha256 and that it runs on
-this architecture, installs the unit, and enables and (re)starts it. Running
-it again converges on the same result and restarts the service only when the
-binary or the unit changed; an update is the same command with the new binary.
+`/var/lib/engram-agent` (`engram-agent:engram-agent 0750`) and
+`/var/lib/engram-agent-snapshot` (`root:engram-agent 2750`), installs the
+binary at `/usr/local/bin/engram-agent` after checking its sha256 and that it
+runs on this architecture, installs the three units, runs the snapshot once,
+enables the snapshot timer (`--now`), and enables and (re)starts the service.
+Running it again converges on the same result and restarts the service only
+when the binary or its unit changed; an update is the same command with the
+new binary. A binary without the `snapshot` command (before v0.2.0) gets no
+snapshot units.
 `--url` and `--code` enrol with Engram (as user `engram-agent`, so the key is
 its own); the running service notices the new identity within a minute.
 
@@ -275,9 +303,13 @@ The tests read fixture trees of `/proc`, `/sys` and cgroup files written by
 the tests themselves, check the downsampling arithmetic, the tier choice,
 retention and the size cap against a real SQLite file, and run the collector
 and every command against the real `/proc` of the machine running them. The
-report loop runs against a stand-in Engram (`httptest`) that verifies every
-signature; one test enrols the real binary's code path with it and runs the
-service until a signed `server.observed` arrives. CI
+snapshot's tests parse `iptables-save` fixtures (Docker's and Tailscale's
+chains, escaped quotes in comments), talk to a fake Docker Engine on a unix
+socket, and read passwd, group, sudoers and `authorized_keys` fixtures
+(options, comments, garbage lines, a FIFO). The report loop runs against a
+stand-in Engram (`httptest`) that verifies every signature, including a
+package list cut into three parts; one test enrols the real binary's code
+path with it and runs the service until a signed `server.observed` arrives. CI
 runs the same and builds both architectures (`.github/workflows/ci.yml`); a
 tag `vX.Y.Z` also publishes the release.
 
@@ -295,11 +327,14 @@ v1.46.0, the last release that builds with Go 1.24.
 - `internal/identity/`: the key pair, the fingerprint, identity.json, the signature.
 - `internal/report/`: the outbox, the HTTP client, the report loop and its backoff.
 - `internal/alerts/`: the saturation rules and their hysteresis.
-- `internal/inventory/`: OS, kernel, packages, updates, units, ports, users, sshd; the findings.
+- `internal/inventory/`: OS, kernel, packages, updates, units, ports, users, sshd; the summary's findings.
+- `internal/snapshot/`: the root snapshot: firewall, containers, users and sudo, SSH key fingerprints, Tailscale; the atomic write.
+- `internal/state/`: the `state.observed` sections, their sha256 and parts, port scopes, the firewall and snapshot findings.
 - `internal/logs/`: `logs` and the masking of secret-looking strings.
 - `internal/agent/`: the service: what runs when, and which events each change makes.
 - `testdata/signature-vector.json`: a fixed signature test vector for Engram's side.
-- `packaging/`: the systemd unit and the installer.
+- `packaging/`: the three systemd units and the installer.
+- `docs/`: the map, the architecture and the decision records.
 
 ## Enrolling and reporting (wire protocol v1)
 
@@ -346,8 +381,8 @@ tests regenerate it with `go test ./internal/identity -run Vector -update`.
   for at most five seconds.
 - **Not enrolled**: history is kept, nothing is sent and no events are
   queued. On a (new) enrolment the agent clears the outbox and sends its
-  current state anew: the summary, and every raised alert; findings and the
-  port baseline start over.
+  current state anew: the summary, every observed-state section and every
+  raised alert; findings start over.
 
 `status` shows the enrolment, the fingerprint, the reporting state (`ok`,
 `retrying`, `removed`, `unauthorized`, `clock`) and when Engram last accepted
@@ -364,9 +399,12 @@ Event refs are the agent's own ids; Engram prefixes them with the agent id.
   updates_count, security_updates_count, unattended_upgrades, failed_units,
   listening, login_users, ssh {port, password_auth, root_login},
   containers_count, agent_version, ssh_host_keys`.
+- `state.observed`, one per section of the observed state (see "The observed
+  state"), sent when the section changed, with exactly these keys: `section,
+  collected_at, sha256, part, parts, items, meta, error`.
 - `alert.raised` / `alert.resolved`, ref the metric (`memory_pct`,
-  `disk_pct:/var`): `rule, metric, level, threshold, value, peak, since`, and
-  for resolved also `until, duration_s`.
+  `disk_pct:/var`, `firewall.uncommented_rules`): `rule, metric, level,
+  threshold, value, peak, since`, and for resolved also `until, duration_s`.
 - `finding.opened` / `finding.resolved`, ref the finding key: `kind,
   category, severity, title, detail, since, subject`. A finding whose title or
   detail changes is sent as `finding.opened` again, with its first `since`.
@@ -382,6 +420,7 @@ Event refs are the agent's own ids; Engram prefixes them with the agent id.
 | `pressure.memory_full` | `pressure.memory_full` (avg10) | > 5 | | 2 min |
 | `pressure.io_full` | `pressure.io_full` (avg10) | > 20 | | 5 min |
 | `swap_pct` | `swap_pct` | > 50 | | 10 min |
+| `firewall_uncommented` | `firewall.uncommented_rules`: the firewall rules without a reason (see Findings) | > 0 | | at once |
 
 Raised at `warn` once the value has stayed over the warn threshold for the
 duration (`since` is when it first crossed). Raised again, at `crit`, once it
@@ -392,6 +431,12 @@ threshold it stays raised. `peak` is the highest value of the episode. A
 metric that disappears (a mount removed) counts as recovered. Episodes are
 saved in the history file, so a restart neither forgets a raised alert nor
 raises it twice.
+
+`firewall_uncommented` is judged from the snapshot at each inventory rather
+than from samples: raised (warn, threshold 0, `value` the number of rules)
+the first time a rule lacks a reason, resolved (with `value` 0) when none
+does. While the snapshot is not ok it is left as it is. It is kept in the
+history file like the others and re-sent on a new enrolment.
 
 ### Inventory
 
@@ -412,14 +457,59 @@ between are the last ones). All of it unprivileged:
 | `ssh` | Port, PasswordAuthentication and PermitRootLogin from `/etc/ssh/sshd_config` and the files it Includes, read as sshd does (first value wins, Match blocks skipped). **The files, not `sshd -T`**, which needs root. A value is `null` when a file that could have set it first cannot be read (Ubuntu's `50-cloud-init.conf` is often 0600), and OpenSSH's default (yes, prohibit-password) when nothing sets it. No sshd_config: port 0, both null |
 | `containers` | running docker containers by short id, from their cgroups (names need the docker socket) |
 
-**The package list is not sent in reports**: `server.observed` carries its
-count and sha256, and the Servers app fetches the list over SSH
-(`inventory --section packages --json`) when the sha256 changed, for CVE
-matching.
+`server.observed` carries the package list's count and sha256; the list
+itself goes in the `packages` section of the observed state.
 
 `listening` in the summary lists `proto/port` for ports some non-loopback
 address listens on; ports bound only to 127.0.0.1 or ::1 are left out (the
 `ports` section has them).
+
+### The observed state
+
+At every inventory the agent builds these sections and sends each one whose
+sha256 (of the canonical JSON of `{items, meta, error}`: keys sorted, no
+whitespace) differs from the one it last sent:
+
+| Section | From | Items |
+|---|---|---|
+| `packages` | dpkg's status file and `/var/lib/apt/extended_states` | `[name, version, source, arch, manual]`; `manual` is false only when apt marked the package `Auto-Installed: 1`; source as dpkg lists it (may be `foo (1.2-3)`) |
+| `network` | the host's interfaces (netlink) | `{interface, address, family, scope}`, loopback and the `veth*` half of each container left out; scope `public`, `private` (RFC 1918, fc00::/7), `tailnet` (100.64.0.0/10, fd7a:115c:a1e0::/48) or `link_local` |
+| `ports` | `/proc/net/{tcp,tcp6,udp,udp6}` | `{proto, port, addresses, scope}`: `public` when any address is unspecified or public, else `tailnet` when every one is, `loopback` when every one is, else `private`. UDP ports in the ephemeral range are left out |
+| `firewall`, `containers`, `users`, `ssh_keys`, `tailscale` | the snapshot's file, as written | see "The root snapshot" |
+| `snapshot` | the snapshot file's presence and age | none; meta `{status: ok, missing, stale (over 30 minutes old) or unreadable, collected_at, error}` |
+
+While the snapshot is not ok its five sections are not sent, so the last ones
+sent stand. `collected_at` is when the data was read (the snapshot's own time
+for its sections). The sha256 last sent per section is kept in the history
+file and forgotten on a new enrolment.
+
+Each event's state stays under 48 KB of JSON (Engram takes at most 64 KB).
+`packages` always uses the ref `state:packages:<i>` (i from 1), even in one
+part; any other section is ref `state:<section>`, and only if it outgrew one
+part would it be cut the same way. Every part carries the whole section's
+`sha256`, its `part` and `parts`; `meta` only in part 1 (`{}` in the others).
+The event key is `state:<section>:<part>:<first 16 hex of sha256>:<unix
+seconds when queued>`: Engram keeps every key it has seen, so a section that
+changes back to an earlier state (a container stopped and started again)
+needs a new key to be heard. A resend of a queued event keeps its key.
+
+### The root snapshot
+
+`engram-agent snapshot` (as root, from `engram-agent-snapshot.timer`: a
+minute after boot, then every 5 minutes) writes
+`/var/lib/engram-agent-snapshot/state.json`: `{version: 1, collected_at,
+agent_version, sections}`, each section `{items, meta, error}`. A section that
+cannot be read carries its own error; the others are unaffected. The file is
+written atomically (a new temp file in the same directory opened
+`O_EXCL|O_NOFOLLOW`, fsync, rename), mode 0640, group `engram-agent`.
+
+| Section | From | Items, sorted |
+|---|---|---|
+| `firewall` | `iptables-save -t filter` and `ip6tables-save -t filter` (from /usr/sbin or /sbin) | one per `-A` line, chains sorted, rules in their order within a chain: `{family: v4\|v6, chain, rule, comment, target}`; `rule` without the `-m comment --comment` part, whitespace collapsed; `comment` unescaped; `target` after `-j` or `-g`. Every chain, Docker's and Tailscale's included. Meta: the built-in chains' `policies` per family, and `backend` (`nf_tables` or `legacy`) |
+| `containers` | the Docker Engine API on `/var/run/docker.sock` (`GET /v1.41/containers/json?all=1`, no docker CLI) | `{name, image, image_id, state, compose_project, compose_service, published}`, `published` like `0.0.0.0:443->443/tcp` or `[::]:443->443/tcp`. No socket: none, meta `docker: false` |
+| `users` | `/etc/passwd`, `/etc/group`, `/etc/sudoers` and `/etc/sudoers.d/*` | the accounts that can log in, plus root: `{login, uid, shell, groups, sudo: nopasswd\|password\|none}` (a rule line for the login or one of its groups containing `ALL`; with `NOPASSWD:` it is nopasswd) |
+| `ssh_keys` | each such user's `~/.ssh/authorized_keys` and `authorized_keys2` | `{login, type, fingerprint: SHA256:..., comment, options}`. Never the key itself |
+| `tailscale` | `tailscale status --json` | this machine only: `{hostname, dns_name, online, addresses, tags, backend_state}`; `NoState` when tailscaled cannot be reached. Not installed: none, meta `installed: false` |
 
 ### Findings
 
@@ -429,11 +519,15 @@ address listens on; ports bound only to 127.0.0.1 or ::1 are left out (the
 | `failed_unit:<unit>` | failed_unit | maintenance, medium | systemd lists the unit as failed |
 | `ssh_password_auth` | ssh_password_auth | security, medium | sshd's files allow password logins (explicitly or by default) |
 | `ssh_root_login` | ssh_root_login | security, high for `yes`, low for any other value but `no` (key-only root login, OpenSSH's default) | PermitRootLogin is not `no` |
-| `new_port:<proto>/<port>` | new_port | security, medium | a port listens on a non-loopback address that was not listening at the **first inventory after enrolment** (the baseline), and is outside the kernel's ephemeral range (`ip_local_port_range`, which passing listeners use). Resolved when it stops listening; the baseline is taken again on a new enrolment |
 | `kernel_not_running_newest` | kernel_not_running_newest | maintenance, low | the newest installed kernel is not the running one |
+| `firewall_uncommented:<family>:<chain>:<first 12 hex of sha256(rule)>` | firewall_rule_uncommented | security, high | a rule in INPUT, FORWARD, OUTPUT or DOCKER-USER, not a jump to a chain named `DOCKER*` or `ts-*`, has no comment matching `^[a-z0-9][a-z0-9_.-]{0,40}: .{20,}$` (a key, a colon, a space, 20 or more characters of why), e.g. `-m comment --comment "web: proxy serves the sites; 80 for ACME"`. Judged only from an ok snapshot whose firewall section has no error; otherwise the open ones stand |
+| `snapshot_not_running` | snapshot_not_running | maintenance, medium | the snapshot's status has not been ok for over 30 minutes; check `systemctl status engram-agent-snapshot.timer` |
 
 A finding is opened with `since` the time the agent first saw it, and
-resolved when the next inventory no longer sees it.
+resolved when the next inventory no longer sees it. Listening ports are no
+longer judged by the agent (v0.1's `new_port` and its enrolment baseline are
+gone; Engram compares the `ports` section with what the server is declared
+to expose): an open `new_port` finding is resolved once after the upgrade.
 
 ### Logs
 
@@ -462,6 +556,5 @@ containment.
 
 - Self-update, on purpose: a server changes version only when someone runs
   `install.sh --version` on it.
-- Firewall rules, process names on ports, `sshd -T`, container names and
-  authorized_keys: they need root or the docker socket, so the Servers app
-  reads them over SSH.
+- Process names on ports and `sshd -T`: they need root and are not in the
+  snapshot, so the Servers app reads them over SSH.

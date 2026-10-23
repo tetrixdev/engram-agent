@@ -1,0 +1,12 @@
+{
+  "Version": "1.90.6",
+  "BackendState": "Running",
+  "TailscaleIPs": ["100.101.1.2", "fd7a:115c:a1e0::1"],
+  "Self": {
+    "ID": "n1", "HostName": "web01", "DNSName": "web01.tail1234.ts.net.",
+    "OS": "linux", "Online": true,
+    "TailscaleIPs": ["fd7a:115c:a1e0::1", "100.101.1.2"],
+    "Tags": ["tag:server", "tag:prod"]
+  },
+  "Peer": {"nodekey:abc": {"HostName": "laptop", "Online": true}}
+}

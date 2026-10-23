@@ -34,7 +34,8 @@ func init() {
 		{"top", "the top processes by cpu and memory at a moment", cmdTop},
 		{"query", "one metric over a range, as JSON: query --json '{\"metric\":...}'", cmdQuery},
 		{"metrics", "the metric names this host records", cmdMetrics},
-		{"inventory", "what is on this server: --section summary|os|kernel|packages|updates|services|ports|users|ssh|containers", cmdInventory},
+		{"inventory", "what is on this server: --section summary|os|kernel|packages|updates|services|ports|users|ssh|containers|state", cmdInventory},
+		{"snapshot", "as root: firewall, containers, users, SSH keys, Tailscale into /var/lib/engram-agent-snapshot [--out DIR] [--json]", cmdSnapshot},
 		{"logs", "recent log lines, masked: --unit X | --container X | --file /var/log/...", cmdLogs},
 		{"enrol", "enrol with Engram: --url <origin> --code <code>", cmdEnrol},
 		{"version", "print the version", func(_ []string, out, _ io.Writer) error {

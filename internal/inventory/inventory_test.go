@@ -224,25 +224,18 @@ func TestFindings(t *testing.T) {
 	s := e.Collect(context.Background(), "0.2.0", false).Summary
 	yes := true
 	s.SSH.PasswordAuth = &yes
-	baseline := map[string]bool{"tcp/22": true, "udp/68": true}
-	got := Findings(s, baseline, 32768, 60999)
+	got := Findings(s)
+	// No new_port: listening ports are judged in Engram against the declaration.
 	want := []string{"failed_unit:backup.timer", "failed_unit:nginx.service", "kernel_not_running_newest",
-		"new_port:tcp/80", "pending_reboot", "ssh_password_auth", "ssh_root_login"}
+		"pending_reboot", "ssh_password_auth", "ssh_root_login"}
 	if k := Keys(got); !reflect.DeepEqual(k, want) {
 		t.Fatalf("findings %v, want %v", k, want)
 	}
 	if f := got["ssh_root_login"]; f.Severity != "low" || f.Category != "security" {
 		t.Errorf("key-only root login: %+v", f)
 	}
-	if f := got["new_port:tcp/80"]; *f.Subject != "tcp/80" || f.Kind != "new_port" {
-		t.Errorf("new port %+v", f)
-	}
 	if f := got["failed_unit:nginx.service"]; *f.Subject != "nginx.service" || f.Category != "maintenance" {
 		t.Errorf("failed unit %+v", f)
-	}
-	// Without a baseline (not enrolled yet) no port is new.
-	if _, ok := Findings(s, nil, 32768, 60999)["new_port:tcp/80"]; ok {
-		t.Error("new port without a baseline")
 	}
 	// The fields are exactly the declared state keys.
 	b, _ := json.Marshal(got["pending_reboot"])
