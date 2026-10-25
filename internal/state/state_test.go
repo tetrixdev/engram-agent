@@ -213,6 +213,54 @@ func TestPackagesManual(t *testing.T) {
 	}
 }
 
+// TestPackagesManualArchAll: apt records an Architecture: all package in
+// extended_states under the native architecture (amd64), as apt's cache
+// gives arch-all packages the native one. The fixture is real dpkg status and
+// extended_states stanzas from an Ubuntu 24.04 amd64 host where
+// `apt-mark showmanual` lists pandoc and libreoffice-common, and not
+// pandoc-data or fonts-dejavu-core.
+func TestPackagesManualArchAll(t *testing.T) {
+	root := filepath.Join("testdata", "apt-arch-all")
+	pkgs, err := inventory.ReadDpkgStatus(filepath.Join(root, "var/lib/dpkg/status"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auto, err := ReadAutoInstalled(filepath.Join(root, "var/lib/apt/extended_states"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manual := map[string]bool{}
+	for _, it := range Packages(pkgs, auto, time.Now(), nil).Items {
+		var row []any
+		if err := json.Unmarshal(it, &row); err != nil {
+			t.Fatal(err)
+		}
+		manual[row[0].(string)+":"+row[3].(string)] = row[4].(bool)
+	}
+	want := map[string]bool{"dpkg:amd64": true, "pandoc:amd64": true, "libreoffice-common:all": true,
+		"pandoc-data:all": false, "fonts-dejavu-core:all": false}
+	if !reflect.DeepEqual(manual, want) {
+		t.Fatalf("manual %v, want %v", manual, want)
+	}
+
+	// The native architecture is dpkg's own, not the agent binary's: on an
+	// arm64 host an arch-all package is under arm64, and an amd64 entry is a
+	// foreign one that does not apply.
+	pkgs = []inventory.Package{{Name: "dpkg", Version: "1", Source: "dpkg", Arch: "arm64"},
+		{Name: "fonts-dejavu-core", Version: "2.37-8", Source: "fonts-dejavu", Arch: "all"},
+		{Name: "pandoc-data", Version: "3.1.3-1", Source: "haskell-pandoc", Arch: "all"}}
+	auto = map[string]bool{"fonts-dejavu-core:arm64": true, "pandoc-data:amd64": true}
+	var got []string
+	for _, it := range Packages(pkgs, auto, time.Now(), nil).Items {
+		got = append(got, string(it))
+	}
+	wantArm := []string{`["dpkg","1","dpkg","arm64",true]`, `["fonts-dejavu-core","2.37-8","fonts-dejavu","all",false]`,
+		`["pandoc-data","3.1.3-1","haskell-pandoc","all",true]`}
+	if !reflect.DeepEqual(got, wantArm) {
+		t.Fatalf("arm64 items %v", got)
+	}
+}
+
 func TestReadSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "state.json")

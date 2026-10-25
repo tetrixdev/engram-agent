@@ -19,7 +19,8 @@ import (
 
 // ReadAutoInstalled reads apt's /var/lib/apt/extended_states: the packages
 // marked Auto-Installed: 1, as "name:arch" (and "name" when a stanza names
-// no architecture). A missing file marks nothing.
+// no architecture, which apt reads as the native one). A missing file marks
+// nothing.
 func ReadAutoInstalled(path string) (map[string]bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -68,13 +69,33 @@ func ReadAutoInstalled(path string) (map[string]bool, error) {
 	return auto, sc.Err()
 }
 
+// NativeArch is dpkg's native architecture: the architecture of the
+// installed dpkg package, which is always native. Without one (not a dpkg
+// system, or a test) it is the agent binary's own.
+func NativeArch(pkgs []inventory.Package) string {
+	for _, p := range pkgs {
+		if p.Name == "dpkg" && p.Arch != "" && p.Arch != "all" {
+			return p.Arch
+		}
+	}
+	return inventory.Arch()
+}
+
 // Packages is the packages section: [name, version, source, arch, manual]
 // per installed package, sorted by name and architecture. manual is true
-// unless apt marked the package automatically installed.
+// unless apt marked the package automatically installed. apt keys
+// extended_states on name and architecture, and records an Architecture: all
+// package, and reads a stanza without an Architecture, as the native one; so
+// does this.
 func Packages(pkgs []inventory.Package, auto map[string]bool, at time.Time, err error) Section {
+	native := NativeArch(pkgs)
 	items := make([]json.RawMessage, 0, len(pkgs))
 	for _, p := range pkgs {
-		manual := !(auto[p.Name+":"+p.Arch] || auto[p.Name])
+		arch := p.Arch
+		if arch == "all" || arch == "" {
+			arch = native
+		}
+		manual := !(auto[p.Name+":"+arch] || (arch == native && auto[p.Name]))
 		b, _ := json.Marshal([]any{p.Name, p.Version, p.Source, p.Arch, manual})
 		items = append(items, b)
 	}
