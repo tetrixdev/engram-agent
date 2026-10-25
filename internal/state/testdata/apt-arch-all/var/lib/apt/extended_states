@@ -1,0 +1,7 @@
+Package: pandoc-data
+Architecture: amd64
+Auto-Installed: 1
+
+Package: fonts-dejavu-core
+Architecture: amd64
+Auto-Installed: 1

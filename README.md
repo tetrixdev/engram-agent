@@ -472,7 +472,7 @@ whitespace) differs from the one it last sent:
 
 | Section | From | Items |
 |---|---|---|
-| `packages` | dpkg's status file and `/var/lib/apt/extended_states` | `[name, version, source, arch, manual]`; `manual` is false only when apt marked the package `Auto-Installed: 1`; source as dpkg lists it (may be `foo (1.2-3)`) |
+| `packages` | dpkg's status file and `/var/lib/apt/extended_states` | `[name, version, source, arch, manual]`; `manual` is false only when apt marked the package `Auto-Installed: 1` (an `Architecture: all` package is matched under the native architecture, as apt records it); source as dpkg lists it (may be `foo (1.2-3)`) |
 | `network` | the host's interfaces (netlink) | `{interface, address, family, scope}`, loopback and the `veth*` half of each container left out; scope `public`, `private` (RFC 1918, fc00::/7), `tailnet` (100.64.0.0/10, fd7a:115c:a1e0::/48) or `link_local` |
 | `ports` | `/proc/net/{tcp,tcp6,udp,udp6}` | `{proto, port, addresses, scope}`: `public` when any address is unspecified or public, else `tailnet` when every one is, `loopback` when every one is, else `private`. UDP ports in the ephemeral range are left out |
 | `firewall`, `containers`, `users`, `ssh_keys`, `tailscale` | the snapshot's file, as written | see "The root snapshot" |
