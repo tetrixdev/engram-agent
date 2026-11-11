@@ -42,7 +42,7 @@ func runCommand(ctx context.Context, name string, args ...string) ([]byte, error
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = []string{"LANG=C", "LC_ALL=C", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
+	cmd.Env = []string{"LANG=C", "LC_ALL=C", "TZ=UTC", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"} // TZ=UTC: systemctl prints its times in UTC
 	return cmd.Output()
 }
 

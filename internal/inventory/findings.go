@@ -8,7 +8,7 @@ import (
 // Finding is what the agent can judge about a server by itself. Its fields
 // are the finding.opened state the Servers app declares.
 type Finding struct {
-	Kind     string  `json:"kind"`     // pending_reboot, failed_unit, ssh_password_auth, ssh_root_login, kernel_not_running_newest, firewall_rule_uncommented, snapshot_not_running
+	Kind     string  `json:"kind"`     // pending_reboot, ssh_password_auth, ssh_root_login, kernel_not_running_newest, firewall_rule_uncommented, snapshot_not_running
 	Category string  `json:"category"` // security, maintenance
 	Severity string  `json:"severity"` // info, low, medium, high, critical
 	Title    string  `json:"title"`
@@ -20,7 +20,11 @@ type Finding struct {
 func strp(s string) *string { return &s }
 
 // Findings judges a summary. The key of each is the event ref: the kind,
-// with ":<subject>" for those about one unit. since is filled by the caller
+// with ":<subject>" for those about one thing. A failed unit is no longer
+// a finding of the agent's own (decision 0003): the agent reports units in
+// the units section and the Servers app judges them, with what the person
+// declared; an open failed_unit finding from an older version is resolved
+// once, as no longer made. since is filled by the caller
 // (when it was first seen). Listening ports are not judged here: Engram
 // compares them with what the server is declared to expose.
 func Findings(s Summary) map[string]Finding {
@@ -31,10 +35,6 @@ func Findings(s Summary) map[string]Finding {
 			f.Detail = strp("Asked for by: " + strings.Join(s.RebootPackages, ", ") + ".")
 		}
 		out["pending_reboot"] = f
-	}
-	for _, u := range s.FailedUnits {
-		out["failed_unit:"+u] = Finding{Kind: "failed_unit", Category: "maintenance", Severity: "medium",
-			Title: "Systemd unit " + u + " has failed", Subject: strp(u)}
 	}
 	if s.SSH.PasswordAuth != nil && *s.SSH.PasswordAuth {
 		out["ssh_password_auth"] = Finding{Kind: "ssh_password_auth", Category: "security", Severity: "medium",

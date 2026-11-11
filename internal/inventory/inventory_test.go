@@ -226,16 +226,13 @@ func TestFindings(t *testing.T) {
 	s.SSH.PasswordAuth = &yes
 	got := Findings(s)
 	// No new_port: listening ports are judged in Engram against the declaration.
-	want := []string{"failed_unit:backup.timer", "failed_unit:nginx.service", "kernel_not_running_newest",
-		"pending_reboot", "ssh_password_auth", "ssh_root_login"}
+	// No failed_unit either: the Servers app judges units (decision 0003).
+	want := []string{"kernel_not_running_newest", "pending_reboot", "ssh_password_auth", "ssh_root_login"}
 	if k := Keys(got); !reflect.DeepEqual(k, want) {
 		t.Fatalf("findings %v, want %v", k, want)
 	}
 	if f := got["ssh_root_login"]; f.Severity != "low" || f.Category != "security" {
 		t.Errorf("key-only root login: %+v", f)
-	}
-	if f := got["failed_unit:nginx.service"]; *f.Subject != "nginx.service" || f.Category != "maintenance" {
-		t.Errorf("failed unit %+v", f)
 	}
 	// The fields are exactly the declared state keys.
 	b, _ := json.Marshal(got["pending_reboot"])

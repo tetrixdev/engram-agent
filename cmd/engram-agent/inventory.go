@@ -77,6 +77,14 @@ func inventorySection(ctx context.Context, env inventory.Env, section string) (a
 		if err != nil {
 			res["error"] = err.Error()
 		}
+		// The units section as the service would build it now, without the
+		// memory it keeps (failed since, last success across reboots).
+		timers, units, uerr := env.Units(ctx, failed)
+		sec, _ := state.Units(timers, units, nil, time.Now(), uerr)
+		res["units"] = sec.Items
+		if uerr != nil {
+			res["units_error"] = uerr.Error()
+		}
 		return res, nil
 	case "ports":
 		ports := env.Ports()
@@ -97,7 +105,10 @@ func inventorySection(ctx context.Context, env inventory.Env, section string) (a
 		snap := state.ReadSnapshot(filepath.Join(env.Root, snapshot.DefaultDir, snapshot.FileName), now)
 		lo, hi := env.EphemeralRange()
 		out := map[string]any{}
-		for _, sec := range state.Collect(full, env.Root, lo, hi, state.HostInterfaces, snap, now) {
+		secs := state.Collect(full, env.Root, lo, hi, state.HostInterfaces, snap, now)
+		timers, units, uerr := env.Units(ctx, full.Summary.FailedUnits)
+		us, _ := state.Units(timers, units, nil, now, uerr)
+		for _, sec := range append(secs, us) {
 			evs := sec.Events(now.Unix())
 			meta := sec.Meta
 			if len(meta) == 0 {

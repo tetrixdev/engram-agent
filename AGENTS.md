@@ -71,6 +71,7 @@ snapshot reads, without writing anything.
 
 - 0001: its own public MIT repository; static Go binary; immutable attested releases from a tag; installed by hand; no self-update.
 - 0002: a root oneshot snapshot on a timer (no input, no network, one file) beside the unprivileged agent; the agent sends `state.observed` including the package list; `new_port` removed; every firewall rule a person writes needs a reason comment.
+- 0003: the `units` section (jobs, failed units, last success kept across reboots); failed holds through a re-run; times at most hourly; Engram judges units, the agent opens no failed_unit finding.
 - The history stays on the server (13 months, avg/p95/max per bucket); Engram gets the last minute and events, and reads ranges over SSH.
 - A `state.observed` key ends in a send stamp: Engram keeps every key for good, so a key per content would drop a section that changes back.
 

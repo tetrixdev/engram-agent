@@ -35,6 +35,9 @@ const (
 	metaStatePrefix   = "state.sha256."      // + section: the sha256 of the section last sent as state.observed
 	metaFirewallAlert = "alerts.firewall"    // the raised firewall_uncommented alert, JSON; "" when not raised
 	metaSnapshotBad   = "snapshot.bad_since" // when the snapshot was first seen not ok, RFC 3339; "" while ok
+	metaUnits         = "units.memory"       // per unit: failed since, last success, JSON (state.UnitMemory)
+	metaUrgentPrefix  = "state.urgent."      // + section: the Urgent digest of the section last sent
+	metaSentPrefix    = "state.sent_at."     // + section: when it was last sent, RFC 3339
 
 	// metaPortsBaseline was v0.1's enrolment baseline of listening ports
 	// (the new_port finding, removed); it is cleared on start.
@@ -135,7 +138,7 @@ func (a *Agent) onIdentity(id *identity.Identity) {
 	_ = a.Outbox.Clear()
 	keys := []string{metaObserved, metaFindings}
 	for _, n := range state.Names {
-		keys = append(keys, metaStatePrefix+n)
+		keys = append(keys, metaStatePrefix+n, metaUrgentPrefix+n, metaSentPrefix+n)
 	}
 	for _, k := range keys {
 		_ = a.Store.SetMeta(k, "")
@@ -237,17 +240,43 @@ func (a *Agent) Inventory(ctx context.Context, withUpdates bool) {
 	a.findings(s, snap, now)
 	a.firewallAlert(snap, now)
 	lo, hi := a.Inv.EphemeralRange()
-	a.sendState(state.Collect(full, a.Inv.Root, lo, hi, a.Interfaces, snap, now), now)
+	secs := state.Collect(full, a.Inv.Root, lo, hi, a.Interfaces, snap, now)
+	// In the order of state.Names: packages, network, ports, units, then the snapshot's.
+	secs = append(secs[:3], append([]state.Section{a.units(ctx, s.FailedUnits, now)}, secs[3:]...)...)
+	a.sendState(secs, now)
+}
+
+// units reads the timers, their services and the failed units, judges them
+// against the memory kept from earlier passes, and keeps the new memory.
+func (a *Agent) units(ctx context.Context, failed []string, now time.Time) state.Section {
+	mem := state.UnitsMemory(a.Store.Meta(metaUnits))
+	extra := append(append([]string(nil), failed...), state.FailedNames(mem)...)
+	timers, units, err := a.Inv.Units(ctx, extra)
+	if err != nil {
+		a.Log.Printf("inventory: units: %v", err)
+	}
+	sec, next := state.Units(timers, units, mem, now, err)
+	if b, err := json.Marshal(next); err == nil {
+		_ = a.Store.SetMeta(metaUnits, string(b))
+	}
+	return sec
 }
 
 // sendState queues every section whose sha256 differs from the one last
 // sent, cut into parts; the five snapshot sections are only among them
-// while the snapshot is ok, so the last ones sent stand meanwhile.
+// while the snapshot is ok, so the last ones sent stand meanwhile. A
+// section with an Urgent digest (units) whose digest is unchanged waits
+// until UnitsMinInterval has passed since it was last sent.
 func (a *Agent) sendState(secs []state.Section, now time.Time) {
 	for _, sec := range secs {
 		sum := sec.SHA256()
 		if sum == a.Store.Meta(metaStatePrefix+sec.Name) {
 			continue
+		}
+		if sec.Urgent != "" && sec.Urgent == a.Store.Meta(metaUrgentPrefix+sec.Name) {
+			if at, err := time.Parse(time.RFC3339, a.Store.Meta(metaSentPrefix+sec.Name)); err == nil && now.Sub(at) < state.UnitsMinInterval {
+				continue
+			}
 		}
 		ok := true
 		for _, ev := range sec.Events(now.Unix()) {
@@ -258,6 +287,10 @@ func (a *Agent) sendState(secs []state.Section, now time.Time) {
 		}
 		if ok {
 			_ = a.Store.SetMeta(metaStatePrefix+sec.Name, sum)
+			if sec.Urgent != "" {
+				_ = a.Store.SetMeta(metaUrgentPrefix+sec.Name, sec.Urgent)
+				_ = a.Store.SetMeta(metaSentPrefix+sec.Name, now.UTC().Format(time.RFC3339))
+			}
 		}
 	}
 }
