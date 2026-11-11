@@ -12,8 +12,8 @@ import (
 // e.g. {"Id": "logrotate.service", "ActiveState": "inactive", ...}.
 type UnitProps map[string]string
 
-// MaxUnits is the most units one pass asks systemd about: every timer's
-// service and every failed unit, so far above what a server has.
+// MaxUnits is the most timers' services one pass asks systemd about, with
+// the failed units (never cut), so far above what a server has.
 const MaxUnits = 300
 
 // unitName is what a unit name looks like; anything else systemctl prints is
@@ -89,10 +89,11 @@ func (e Env) Units(ctx context.Context, extra []string) (timers, units []UnitPro
 		}
 	}
 	sort.Strings(jobs)
-	names = append(names, jobs...)
-	if len(names) > MaxUnits {
-		names = names[:MaxUnits]
+	// Only timers' services are cut: a failure being followed never is.
+	if room := MaxUnits - len(names); len(jobs) > room {
+		jobs = jobs[:max(room, 0)]
 	}
+	names = append(names, jobs...)
 	sort.Slice(timers, func(i, j int) bool { return timers[i]["Id"] < timers[j]["Id"] })
 	if len(names) == 0 {
 		return timers, nil, nil

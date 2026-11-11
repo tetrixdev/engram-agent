@@ -35,9 +35,11 @@ stale. Engram's record of the same day says how the app judges and tells.
 - **`failed` holds through a new run and a reboot.** A unit judged failed
   stays failed while a run is in progress, and after a reboot until it has
   run, and turns false only when a run ends without failing, it is active,
-  it is reset, or it is gone. One failure is one failure. A success is a run
-  whose result is success and whose main process exited 0 (after a
-  `reset-failed` the result reads success over the failed run's exit).
+  it is reset, or it is gone. One failure is one failure, reported with the
+  failed run's result and exit until it is over. A success is what systemd
+  calls one (Result success, honouring `SuccessExitStatus=`) for a run that
+  ended after any failure held: after a `reset-failed` the result reads
+  success over the failed run's exit.
 - **The agent keeps each job's last success** in its history file, because
   systemd forgets a unit's exit time on a reboot and keeps no "last
   success" once a run has failed.

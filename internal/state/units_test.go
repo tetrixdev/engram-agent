@@ -78,11 +78,12 @@ func TestUnitsJudgment(t *testing.T) {
 	}
 	urgent2 := sec.Urgent
 
-	// Run again by hand: activating, still failed since the same time.
+	// Run again by hand: activating, still failed since the same time, and
+	// still reported with the failed run's result and exit.
 	running := inventory.UnitProps{"Id": "backup.service", "ActiveState": "activating", "Result": "success"}
 	sec, mem = Units(timers, []inventory.UnitProps{running}, mem, later.Add(time.Minute), nil)
 	b = unitsOf(t, sec)["backup.service"]
-	if !b.Failed || *b.FailedSince != "2026-11-12T03:00:40Z" || sec.Urgent != urgent2 {
+	if !b.Failed || *b.FailedSince != "2026-11-12T03:00:40Z" || sec.Urgent != urgent2 || b.Result != "exit-code" || b.ExitStatus == nil || *b.ExitStatus != 2 {
 		t.Fatalf("a re-run in progress: %+v", b)
 	}
 
@@ -102,9 +103,9 @@ func TestUnitsJudgment(t *testing.T) {
 
 	// reset-failed: Result success, but the exit is the failed run's: no
 	// success recorded, and the failure is cleared (a person reset it).
-	failed2 := inventory.UnitProps{"Id": "backup.service", "ActiveState": "failed", "Result": "exit-code", "ExecMainExitTimestamp": "Fri 2026-11-13 03:00:40 UTC", "ExecMainCode": "1", "ExecMainStatus": "2"}
+	failed2 := inventory.UnitProps{"Id": "backup.service", "ActiveState": "failed", "Result": "exit-code", "ExecMainExitTimestamp": "Fri 2026-11-13 03:00:40 UTC", "ExecMainCode": "1", "ExecMainStatus": "2", "StateChangeTimestamp": "Fri 2026-11-13 03:00:40 UTC"}
 	_, m2 := Units(timers, []inventory.UnitProps{failed2}, mem, later.Add(25*time.Hour), nil)
-	reset := inventory.UnitProps{"Id": "backup.service", "ActiveState": "inactive", "Result": "success", "ExecMainExitTimestamp": "Fri 2026-11-13 03:00:40 UTC", "ExecMainCode": "1", "ExecMainStatus": "2"}
+	reset := inventory.UnitProps{"Id": "backup.service", "ActiveState": "inactive", "Result": "success", "ExecMainExitTimestamp": "Fri 2026-11-13 03:00:40 UTC", "ExecMainCode": "1", "ExecMainStatus": "2", "StateChangeTimestamp": "Fri 2026-11-13 09:00:00 UTC"}
 	sec, m3 := Units(timers, []inventory.UnitProps{reset}, m2, later.Add(26*time.Hour), nil)
 	if b = unitsOf(t, sec)["backup.service"]; b.Failed || *b.LastSuccess != "2026-11-12T03:30:00Z" {
 		t.Fatalf("after reset-failed: %+v", b)
@@ -115,6 +116,11 @@ func TestUnitsJudgment(t *testing.T) {
 	sec, _ = Units(timers, []inventory.UnitProps{booted}, m4, later.Add(28*time.Hour), nil)
 	if b = unitsOf(t, sec)["backup.service"]; !b.Failed {
 		t.Fatalf("a reboot cleared a failure: %+v", b)
+	}
+	// A job whose SuccessExitStatus= allows exit 24: systemd says success, so it is one.
+	ok24 := inventory.UnitProps{"Id": "rsync.service", "ActiveState": "inactive", "Result": "success", "ExecMainExitTimestamp": "Sat 2026-11-14 03:00:00 UTC", "ExecMainCode": "1", "ExecMainStatus": "24", "StateChangeTimestamp": "Sat 2026-11-14 03:00:00 UTC"}
+	if sec, _ := Units(nil, []inventory.UnitProps{ok24}, nil, later.Add(30*time.Hour), nil); unitsOf(t, sec)["rsync.service"].LastSuccess == nil {
+		t.Fatal("a success by SuccessExitStatus was not one")
 	}
 	// A unit gone (its file removed): no item, memory dropped.
 	gone := inventory.UnitProps{"Id": "backup.service", "LoadState": "not-found", "ActiveState": "inactive", "Result": "success"}

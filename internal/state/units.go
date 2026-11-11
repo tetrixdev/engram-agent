@@ -50,8 +50,10 @@ type Unit struct {
 
 // UnitMemory is what the agent keeps per unit between passes.
 type UnitMemory struct {
-	FailedSince string `json:"failed_since,omitempty"` // RFC 3339; "" while not failed
-	LastSuccess string `json:"last_success,omitempty"` // RFC 3339; "" when never seen
+	FailedSince  string `json:"failed_since,omitempty"`  // RFC 3339; "" while not failed
+	FailedResult string `json:"failed_result,omitempty"` // systemd's Result of the failed run
+	FailedExit   *int   `json:"failed_exit,omitempty"`   // its main process's exit status, if known
+	LastSuccess  string `json:"last_success,omitempty"`  // RFC 3339; "" when never seen
 }
 
 // inProgress are the ActiveStates of a run still going on.
@@ -125,11 +127,14 @@ func Units(timers, units []inventory.UnitProps, mem map[string]UnitMemory, now t
 		m := mem[id]
 		st := u["ActiveState"]
 		lastRun := SystemdTime(u["ExecMainExitTimestamp"])
+		heldSince := m.FailedSince
 		// Held failed while it runs again, and after a reboot until it has
-		// run (inactive and no exit time: systemd forgot the failed run, no
-		// run since). A run that ends without failing, active (running), or
-		// a reset-failed (inactive with the old exit time) clears it.
-		failed := st == "failed" || (m.FailedSince != "" && (inProgress[st] || (st == "inactive" && lastRun == nil)))
+		// run (inactive, no exit time and no state change since boot:
+		// systemd forgot the failed run). A run that ends without failing,
+		// active (running), a reset-failed (which stamps a state change) or
+		// a unit file gone clears it.
+		rebooted := st == "inactive" && lastRun == nil && SystemdTime(u["StateChangeTimestamp"]) == nil
+		failed := st == "failed" || (heldSince != "" && (inProgress[st] || rebooted))
 		if failed {
 			if m.FailedSince == "" {
 				// When systemd says it entered the failed state, else now.
@@ -138,13 +143,24 @@ func Units(timers, units []inventory.UnitProps, mem map[string]UnitMemory, now t
 					m.FailedSince = at.Format(time.RFC3339)
 				}
 			}
+			if st == "failed" {
+				m.FailedResult, m.FailedExit = u["Result"], nil
+				if n, err := strconv.Atoi(u["ExecMainStatus"]); err == nil && lastRun != nil {
+					m.FailedExit = &n
+				}
+			}
 		} else {
-			m.FailedSince = ""
+			m.FailedSince, m.FailedResult, m.FailedExit = "", "", nil
 		}
-		// A success only when the main process exited 0: after a
-		// reset-failed, Result is success but the exit is the failed run's.
-		exitedOK := u["ExecMainStatus"] == "0" && (u["ExecMainCode"] == "" || u["ExecMainCode"] == "1")
-		if !failed && st != "failed" && u["Result"] == "success" && lastRun != nil && exitedOK {
+		// A success is a run systemd counts as one (Result success, which
+		// honours SuccessExitStatus=) that ended after any failure held
+		// before: after a reset-failed the result reads success over the
+		// failed run's exit, which is not after the failure.
+		afterFailure := true
+		if at, err := time.Parse(time.RFC3339, heldSince); err == nil && lastRun != nil && !lastRun.After(at) {
+			afterFailure = false
+		}
+		if !failed && u["Result"] == "success" && lastRun != nil && afterFailure {
 			if prev, err := time.Parse(time.RFC3339, m.LastSuccess); err != nil || lastRun.After(prev) {
 				m.LastSuccess = lastRun.Format(time.RFC3339)
 			}
@@ -153,6 +169,12 @@ func Units(timers, units []inventory.UnitProps, mem map[string]UnitMemory, now t
 			LastRun: rfc(lastRun), LastSuccess: strOrNil(m.LastSuccess)}
 		if n, err := strconv.Atoi(u["ExecMainStatus"]); err == nil && lastRun != nil {
 			it.ExitStatus = &n
+		}
+		if failed && st != "failed" && m.FailedResult != "" {
+			// Held through a re-run or a reboot: systemd has reset the
+			// result and exit; report the failed run's, so what Engram shows
+			// of the failure does not change until it is over.
+			it.Result, it.ExitStatus = m.FailedResult, m.FailedExit
 		}
 		if t, ok := timerOf[id]; ok {
 			tn := t["Id"]
