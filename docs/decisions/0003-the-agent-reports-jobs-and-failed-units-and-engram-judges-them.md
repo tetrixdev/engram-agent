@@ -32,9 +32,12 @@ stale. Engram's record of the same day says how the app judges and tells.
   timer's service (a job), every failed unit, every failed timer. Per item
   its state and result now, whether it is `failed`, since when, its last
   run and exit status, its last success and its timer's next run.
-- **`failed` holds through a new run.** A unit judged failed stays failed
-  while a run is in progress, and turns false only when a run ends without
-  failing, it is reset, or it is gone. One failure is one failure.
+- **`failed` holds through a new run and a reboot.** A unit judged failed
+  stays failed while a run is in progress, and after a reboot until it has
+  run, and turns false only when a run ends without failing, it is active,
+  it is reset, or it is gone. One failure is one failure. A success is a run
+  whose result is success and whose main process exited 0 (after a
+  `reset-failed` the result reads success over the failed run's exit).
 - **The agent keeps each job's last success** in its history file, because
   systemd forgets a unit's exit time on a reboot and keeps no "last
   success" once a run has failed.

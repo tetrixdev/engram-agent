@@ -109,6 +109,9 @@ func Units(timers, units []inventory.UnitProps, mem map[string]UnitMemory, now t
 			m := mem[t["Id"]]
 			if m.FailedSince == "" {
 				m.FailedSince = now.UTC().Format(time.RFC3339)
+				if at := SystemdTime(t["StateChangeTimestamp"]); t["ActiveState"] == "failed" && at != nil && !at.After(now) {
+					m.FailedSince = at.Format(time.RFC3339)
+				}
 			}
 			next[t["Id"]] = m
 			items = append(items, Unit{Unit: t["Id"], State: t["ActiveState"], Result: t["Result"], Failed: true, FailedSince: strOrNil(m.FailedSince)})
@@ -116,9 +119,17 @@ func Units(timers, units []inventory.UnitProps, mem map[string]UnitMemory, now t
 	}
 	for _, u := range units {
 		id := u["Id"]
+		if u["LoadState"] == "not-found" {
+			continue // gone: no item, and its memory is dropped
+		}
 		m := mem[id]
 		st := u["ActiveState"]
-		failed := st == "failed" || (m.FailedSince != "" && inProgress[st])
+		lastRun := SystemdTime(u["ExecMainExitTimestamp"])
+		// Held failed while it runs again, and after a reboot until it has
+		// run (inactive and no exit time: systemd forgot the failed run, no
+		// run since). A run that ends without failing, active (running), or
+		// a reset-failed (inactive with the old exit time) clears it.
+		failed := st == "failed" || (m.FailedSince != "" && (inProgress[st] || (st == "inactive" && lastRun == nil)))
 		if failed {
 			if m.FailedSince == "" {
 				// When systemd says it entered the failed state, else now.
@@ -130,8 +141,10 @@ func Units(timers, units []inventory.UnitProps, mem map[string]UnitMemory, now t
 		} else {
 			m.FailedSince = ""
 		}
-		lastRun := SystemdTime(u["ExecMainExitTimestamp"])
-		if !inProgress[st] && st != "failed" && u["Result"] == "success" && lastRun != nil {
+		// A success only when the main process exited 0: after a
+		// reset-failed, Result is success but the exit is the failed run's.
+		exitedOK := u["ExecMainStatus"] == "0" && (u["ExecMainCode"] == "" || u["ExecMainCode"] == "1")
+		if !failed && st != "failed" && u["Result"] == "success" && lastRun != nil && exitedOK {
 			if prev, err := time.Parse(time.RFC3339, m.LastSuccess); err != nil || lastRun.After(prev) {
 				m.LastSuccess = lastRun.Format(time.RFC3339)
 			}

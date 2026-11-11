@@ -46,7 +46,7 @@ func TestUnitsJudgment(t *testing.T) {
 		{"Id": "backup.timer", "Unit": "backup.service", "ActiveState": "active", "NextElapseUSecRealtime": "Thu 2026-11-12 03:00:00 UTC"},
 		{"Id": "broken.timer", "Unit": "missing.service", "ActiveState": "failed", "Result": "resources"},
 	}
-	ok := inventory.UnitProps{"Id": "backup.service", "ActiveState": "inactive", "Result": "success", "ExecMainExitTimestamp": "Wed 2026-11-11 03:00:40 UTC", "ExecMainStatus": "0"}
+	ok := inventory.UnitProps{"Id": "backup.service", "ActiveState": "inactive", "Result": "success", "ExecMainExitTimestamp": "Wed 2026-11-11 03:00:40 UTC", "ExecMainCode": "1", "ExecMainStatus": "0"}
 	sec, mem := Units(timers, []inventory.UnitProps{ok}, map[string]UnitMemory{}, now, nil)
 	u := unitsOf(t, sec)
 	b := u["backup.service"]
@@ -98,6 +98,29 @@ func TestUnitsJudgment(t *testing.T) {
 	b = unitsOf(t, sec)["backup.service"]
 	if b.Failed || b.FailedSince != nil || *b.LastSuccess != "2026-11-12T03:30:00Z" {
 		t.Fatalf("recovered: %+v", b)
+	}
+
+	// reset-failed: Result success, but the exit is the failed run's: no
+	// success recorded, and the failure is cleared (a person reset it).
+	failed2 := inventory.UnitProps{"Id": "backup.service", "ActiveState": "failed", "Result": "exit-code", "ExecMainExitTimestamp": "Fri 2026-11-13 03:00:40 UTC", "ExecMainCode": "1", "ExecMainStatus": "2"}
+	_, m2 := Units(timers, []inventory.UnitProps{failed2}, mem, later.Add(25*time.Hour), nil)
+	reset := inventory.UnitProps{"Id": "backup.service", "ActiveState": "inactive", "Result": "success", "ExecMainExitTimestamp": "Fri 2026-11-13 03:00:40 UTC", "ExecMainCode": "1", "ExecMainStatus": "2"}
+	sec, m3 := Units(timers, []inventory.UnitProps{reset}, m2, later.Add(26*time.Hour), nil)
+	if b = unitsOf(t, sec)["backup.service"]; b.Failed || *b.LastSuccess != "2026-11-12T03:30:00Z" {
+		t.Fatalf("after reset-failed: %+v", b)
+	}
+	// A reboot after a failure: inactive, no exit time: still failed until it runs.
+	_, m4 := Units(timers, []inventory.UnitProps{failed2}, m3, later.Add(27*time.Hour), nil)
+	booted := inventory.UnitProps{"Id": "backup.service", "ActiveState": "inactive", "Result": "success"}
+	sec, _ = Units(timers, []inventory.UnitProps{booted}, m4, later.Add(28*time.Hour), nil)
+	if b = unitsOf(t, sec)["backup.service"]; !b.Failed {
+		t.Fatalf("a reboot cleared a failure: %+v", b)
+	}
+	// A unit gone (its file removed): no item, memory dropped.
+	gone := inventory.UnitProps{"Id": "backup.service", "LoadState": "not-found", "ActiveState": "inactive", "Result": "success"}
+	sec, m5 := Units(nil, []inventory.UnitProps{gone}, m4, later.Add(29*time.Hour), nil)
+	if len(sec.Items) != 0 || len(m5) != 0 {
+		t.Fatalf("a gone unit: %s %v", sec.Items, m5)
 	}
 
 	// After a reboot systemd has no exit time: the agent's last success stands.

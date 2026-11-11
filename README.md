@@ -504,15 +504,19 @@ failed or has not succeeded for too long (decision 0003). Per item:
 - `failed`: the agent's judgment: the unit failed and has not run
   successfully since. It stays true while a new run is in progress
   (activating, deactivating, reloading), so a job that fails, is run again
-  and fails again is one failure; it turns false once a run ends without
-  failing, the unit is reset (`systemctl reset-failed`) or it is gone.
+  and fails again is one failure, and after a reboot until the unit has run
+  again; it turns false once a run ends without failing, the unit is active,
+  it is reset (`systemctl reset-failed`, before a reboot) or it is gone (its
+  unit file removed: then it is no longer an item).
 - `failed_since`: when systemd says it entered the failed state (else when
   the agent first saw it), RFC 3339 UTC, or null.
 - `last_run`, `exit_status`: when the last run ended (ExecMainExitTimestamp)
   and its exit status, or null (systemd forgets both on a reboot).
-- `last_success`: the last time the agent saw a run of it end in success,
-  kept in the history file across reboots, or null when it never has.
-- `next_run`: the timer's next wall-clock run, or null.
+- `last_success`: the last time the agent saw a run of it end in success
+  (result success, main process exited 0), kept in the history file across
+  reboots, or null when it never has.
+- `next_run`: the timer's next wall-clock run, or null, also for a timer
+  without a calendar schedule (`OnBootSec`, `OnUnitActiveSec`).
 
 A failure or recovery (the units listed, and which are failed) is sent at
 once; a change of times only (a timer ran, the next run moved) at most once

@@ -25,8 +25,8 @@ func ValidUnitName(s string) bool { return unitName.MatchString(s) }
 
 // The properties read per timer and per unit.
 const (
-	timerProps = "Id,LoadState,ActiveState,Result,Unit,LastTriggerUSec,NextElapseUSecRealtime"
-	unitProps  = "Id,LoadState,ActiveState,SubState,Result,StateChangeTimestamp,ExecMainExitTimestamp,ExecMainStatus"
+	timerProps = "Id,LoadState,ActiveState,Result,Unit,StateChangeTimestamp,LastTriggerUSec,NextElapseUSecRealtime"
+	unitProps  = "Id,LoadState,ActiveState,SubState,Result,StateChangeTimestamp,ExecMainExitTimestamp,ExecMainCode,ExecMainStatus"
 )
 
 // ParseShow reads `systemctl show` output: blocks of Key=Value lines, one
@@ -67,25 +67,29 @@ func (e Env) Units(ctx context.Context, extra []string) (timers, units []UnitPro
 		return nil, nil, fmt.Errorf("systemctl show *.timer: %w", terr)
 	}
 	want := map[string]bool{}
+	// The failed and held-failed units first, so a cut at MaxUnits only ever
+	// leaves out timers' services, never a failure being followed.
+	var names []string
+	for _, u := range extra {
+		if ValidUnitName(u) && !strings.HasSuffix(u, ".timer") && !want[u] {
+			want[u] = true
+			names = append(names, u)
+		}
+	}
+	sort.Strings(names)
+	var jobs []string
 	for _, t := range ParseShow(string(out)) {
-		if !ValidUnitName(t["Id"]) || t["LoadState"] == "not-found" {
+		if !ValidUnitName(t["Id"]) || t["LoadState"] != "loaded" {
 			continue
 		}
 		timers = append(timers, t)
-		if ValidUnitName(t["Unit"]) {
-			want[t["Unit"]] = true
-		}
-	}
-	for _, u := range extra {
-		if ValidUnitName(u) && !strings.HasSuffix(u, ".timer") {
+		if u := t["Unit"]; ValidUnitName(u) && !want[u] {
 			want[u] = true
+			jobs = append(jobs, u)
 		}
 	}
-	names := make([]string, 0, len(want))
-	for n := range want {
-		names = append(names, n)
-	}
-	sort.Strings(names)
+	sort.Strings(jobs)
+	names = append(names, jobs...)
 	if len(names) > MaxUnits {
 		names = names[:MaxUnits]
 	}
@@ -98,10 +102,20 @@ func (e Env) Units(ctx context.Context, extra []string) (timers, units []UnitPro
 	if uerr != nil && len(out) == 0 {
 		return timers, nil, fmt.Errorf("systemctl show (%d units): %w", len(names), uerr)
 	}
+	asked := map[string]bool{}
+	for _, n := range names {
+		asked[n] = true
+	}
+	got := 0
 	for _, u := range ParseShow(string(out)) {
-		if want[u["Id"]] {
+		if asked[u["Id"]] {
 			units = append(units, u)
+			got++
 		}
+	}
+	if uerr != nil && got < len(names) {
+		// Part of an answer: a unit left out would read as recovered.
+		return timers, nil, fmt.Errorf("systemctl show (%d units, %d answered): %w", len(names), got, uerr)
 	}
 	sort.Slice(units, func(i, j int) bool { return units[i]["Id"] < units[j]["Id"] })
 	return timers, units, nil
