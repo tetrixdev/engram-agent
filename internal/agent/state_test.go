@@ -72,7 +72,7 @@ func TestSnapshotStateFirewallFindingsAndAlert(t *testing.T) {
 
 	// Every section, the snapshot's five included.
 	refs := stateRefs(evs)
-	want := []string{"state:packages:1", "state:network", "state:ports", "state:firewall", "state:containers", "state:users", "state:ssh_keys", "state:tailscale", "state:snapshot"}
+	want := []string{"state:packages:1", "state:network", "state:ports", "state:units", "state:firewall", "state:containers", "state:users", "state:ssh_keys", "state:tailscale", "state:snapshot"}
 	if !reflect.DeepEqual(refs, want) {
 		t.Fatalf("state refs %v", refs)
 	}

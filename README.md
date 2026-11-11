@@ -329,7 +329,7 @@ v1.46.0, the last release that builds with Go 1.24.
 - `internal/alerts/`: the saturation rules and their hysteresis.
 - `internal/inventory/`: OS, kernel, packages, updates, units, ports, users, sshd; the summary's findings.
 - `internal/snapshot/`: the root snapshot: firewall, containers, users and sudo, SSH key fingerprints, Tailscale; the atomic write.
-- `internal/state/`: the `state.observed` sections, their sha256 and parts, port scopes, the firewall and snapshot findings.
+- `internal/state/`: the `state.observed` sections, their sha256 and parts, port scopes, the units judgment, the firewall and snapshot findings.
 - `internal/logs/`: `logs` and the masking of secret-looking strings.
 - `internal/agent/`: the service: what runs when, and which events each change makes.
 - `testdata/signature-vector.json`: a fixed signature test vector for Engram's side.
@@ -451,7 +451,7 @@ between are the last ones). All of it unprivileged:
 | `kernel` | the running kernel (`/proc/sys/kernel/osrelease`) and the installed `linux-image-*` packages, newest by dpkg version order; `/var/run/reboot-required` and `.pkgs` |
 | `packages` | every installed package from dpkg's status file: name, version, source, arch; with count and sha256 over `name\tversion\tarch\n`, sorted |
 | `updates` | `apt-get -s -o Debug::NoLocking=true dist-upgrade` as the calling user: each `Inst` of an installed package is an update, a security one when an origin is a `-security` pocket. It reads apt's lists as they are and never refreshes them. Measured on an Ubuntu 24.04 host as a normal user: 2.4 s for 33 updates. Plus whether unattended-upgrades is on (`APT::Periodic::Unattended-Upgrade` and the package) |
-| `services` | `systemctl --failed --plain --no-legend` |
+| `services` | `systemctl --failed --plain --no-legend`, and the `units` section as it would be built now (without the agent's memory) |
 | `ports` | listening TCP and UDP sockets from `/proc/net/{tcp,tcp6,udp,udp6}` with their address; no process names (those need root) |
 | `users` | accounts in `/etc/passwd` whose shell is not nologin, false, sync, shutdown or halt |
 | `ssh` | Port, PasswordAuthentication and PermitRootLogin from `/etc/ssh/sshd_config` and the files it Includes, read as sshd does (first value wins, Match blocks skipped). **The files, not `sshd -T`**, which needs root. A value is `null` when a file that could have set it first cannot be read (Ubuntu's `50-cloud-init.conf` is often 0600), and OpenSSH's default (yes, prohibit-password) when nothing sets it. No sshd_config: port 0, both null |
@@ -475,6 +475,7 @@ whitespace) differs from the one it last sent:
 | `packages` | dpkg's status file and `/var/lib/apt/extended_states` | `[name, version, source, arch, manual]`; `manual` is false only when apt marked the package `Auto-Installed: 1` (an `Architecture: all` package is matched under the native architecture, as apt records it); source as dpkg lists it (may be `foo (1.2-3)`) |
 | `network` | the host's interfaces (netlink) | `{interface, address, family, scope}`, loopback and the `veth*` half of each container left out; scope `public`, `private` (RFC 1918, fc00::/7), `tailnet` (100.64.0.0/10, fd7a:115c:a1e0::/48) or `link_local` |
 | `ports` | `/proc/net/{tcp,tcp6,udp,udp6}` | `{proto, port, addresses, scope}`: `public` when any address is unspecified or public, else `tailnet` when every one is, `loopback` when every one is, else `private`. UDP ports in the ephemeral range are left out |
+| `units` | `systemctl show` of every loaded timer, the service each starts, and the failed units (as the agent, with `TZ=UTC`) | one per job (a service a timer starts), failed unit or failed timer, sorted: `{unit, timer, state, result, failed, failed_since, last_run, exit_status, last_success, next_run}`; see "Units" below |
 | `firewall`, `containers`, `users`, `ssh_keys`, `tailscale` | the snapshot's file, as written | see "The root snapshot" |
 | `snapshot` | the snapshot file's presence and age | none; meta `{status: ok, missing, stale (over 30 minutes old) or unreadable, collected_at, error}` |
 
@@ -492,6 +493,32 @@ The event key is `state:<section>:<part>:<first 16 hex of sha256>:<unix
 seconds when queued>`: Engram keeps every key it has seen, so a section that
 changes back to an earlier state (a container stopped and started again)
 needs a new key to be heard. A resend of a queued event keeps its key.
+
+### Units
+
+The `units` section is how Engram's Servers app learns that a scheduled job
+failed or has not succeeded for too long (decision 0003). Per item:
+
+- `unit`: the unit name; `timer`: the timer that starts it, or null.
+- `state`, `result`: systemd's ActiveState and Result now.
+- `failed`: the agent's judgment: the unit failed and has not run
+  successfully since. It stays true while a new run is in progress
+  (activating, deactivating, reloading), so a job that fails, is run again
+  and fails again is one failure; it turns false once a run ends without
+  failing, the unit is reset (`systemctl reset-failed`) or it is gone.
+- `failed_since`: when systemd says it entered the failed state (else when
+  the agent first saw it), RFC 3339 UTC, or null.
+- `last_run`, `exit_status`: when the last run ended (ExecMainExitTimestamp)
+  and its exit status, or null (systemd forgets both on a reboot).
+- `last_success`: the last time the agent saw a run of it end in success,
+  kept in the history file across reboots, or null when it never has.
+- `next_run`: the timer's next wall-clock run, or null.
+
+A failure or recovery (the units listed, and which are failed) is sent at
+once; a change of times only (a timer ran, the next run moved) at most once
+an hour, so a timer every few minutes does not make an event every
+inventory. The agent reads no file a job writes and no log line: whether a
+job worked is what systemd says of its exit. A job run by cron is not seen.
 
 ### The root snapshot
 
@@ -516,7 +543,6 @@ written atomically (a new temp file in the same directory opened
 | Key | Kind | Category, severity | Open while |
 |---|---|---|---|
 | `pending_reboot` | pending_reboot | maintenance, medium | `/var/run/reboot-required` exists |
-| `failed_unit:<unit>` | failed_unit | maintenance, medium | systemd lists the unit as failed |
 | `ssh_password_auth` | ssh_password_auth | security, medium | sshd's files allow password logins (explicitly or by default) |
 | `ssh_root_login` | ssh_root_login | security, high for `yes`, low for any other value but `no` (key-only root login, OpenSSH's default) | PermitRootLogin is not `no` |
 | `kernel_not_running_newest` | kernel_not_running_newest | maintenance, low | the newest installed kernel is not the running one |
@@ -528,6 +554,10 @@ resolved when the next inventory no longer sees it. Listening ports are no
 longer judged by the agent (v0.1's `new_port` and its enrolment baseline are
 gone; Engram compares the `ports` section with what the server is declared
 to expose): an open `new_port` finding is resolved once after the upgrade.
+Likewise a failed unit is no longer the agent's finding from v0.3.0: the
+Servers app judges the `units` section with what the person declared (a
+unit known to fail, a job that must succeed within N hours), so an open
+`failed_unit:<unit>` finding is resolved once after the upgrade.
 
 ### Logs
 

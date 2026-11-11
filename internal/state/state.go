@@ -19,7 +19,7 @@ import (
 const MaxPartBytes = 48 << 10
 
 // Names are the sections, in the order they are sent.
-var Names = []string{"packages", "network", "ports", "firewall", "containers", "users", "ssh_keys", "tailscale", "snapshot"}
+var Names = []string{"packages", "network", "ports", "units", "firewall", "containers", "users", "ssh_keys", "tailscale", "snapshot"}
 
 // Section is one section as it is compared and sent.
 type Section struct {
@@ -28,6 +28,11 @@ type Section struct {
 	Items       []json.RawMessage
 	Meta        json.RawMessage // a JSON object; {} when none
 	Error       *string
+	// Urgent, when set, is a digest of what in the section must reach Engram
+	// at once; a change elsewhere in it (only times) waits until
+	// UnitsMinInterval has passed since it was last sent. Empty: every
+	// change goes at once.
+	Urgent string
 }
 
 // PartState is a state.observed event's state, with exactly the keys the
